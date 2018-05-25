@@ -1,13 +1,41 @@
 #include <mpi.h>
 #include <stdio.h>
 #include <Communicator.h>
+#include <DataStore.h>
+#include <AbstractLogger.h>
+#include <StandardOutputLogger.h>
+#include <Server.h>
 
 int main() {
 
+  Server server;
 
-  Communicator communicator;
+  // create the communicator
+  CommunicatorPtr communicator = (new Communicator())->getHandle()->to<Communicator>();
+  server.addFunctionality(communicator);
+
+  // create data store
+  AbstractFunctionalityPtr dataStore = (new DataStore())->getHandle();
+  server.addFunctionality(dataStore);
+
+  // if this is the master
+  if(communicator->getNodeID() == 0) {
+
+    // create the logger
+    AbstractFunctionalityPtr logger = (new StandardOutputLogger("Master"))->getHandle();
+    server.addFunctionality(logger);
+  }
+  else {
+
+    // create the logger
+    AbstractFunctionalityPtr logger = (new StandardOutputLogger("Worker"))->getHandle();
+    server.addFunctionality(logger);
+  }
+
+  // run the server
+  server.run();
 
   // Print off a hello world message
-  printf("Hello world from processor %s, rank %d out of %d processors\n", communicator.getNodeName().c_str(),
-         communicator.getNodeID(), communicator.getNumNodes());
+  printf("Hello world from processor %s, rank %d out of %d processors\n", communicator->getNodeName().c_str(),
+         communicator->getNodeID(), communicator->getNumNodes());
 }

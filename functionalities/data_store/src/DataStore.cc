@@ -15,3 +15,7 @@ SetSchema DataStore::getSchema(const std::string &setName) {
 void DataStore::addSet(SetSchema schema) {
 
 }
+
+FunctionalityType DataStore::getType() {
+  return DATA_STORE;
+}

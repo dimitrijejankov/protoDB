@@ -13,3 +13,7 @@ void AbstractLogger::warn(const std::string &text) {
 void AbstractLogger::error(const std::string &text) {
   output("[ERROR][" + name  + "] : " + text);
 }
+
+FunctionalityType AbstractLogger::getType() {
+  return LOGGER;
+}

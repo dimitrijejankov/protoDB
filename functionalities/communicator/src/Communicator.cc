@@ -1,7 +1,3 @@
-//
-// Created by dimitrije on 5/25/18.
-//
-
 #include <Communicator.h>
 #include <mpi.h>
 
@@ -46,4 +42,8 @@ std::string Communicator::getNodeName() {
 
   // return the name of the node
   return std::string(processor_name);
+}
+
+FunctionalityType Communicator::getType() {
+  return COMMUNICATOR;
 }

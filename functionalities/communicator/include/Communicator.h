@@ -3,6 +3,9 @@
 
 #include "AbstractFunctionality.h"
 
+class Communicator;
+typedef std::shared_ptr<Communicator> CommunicatorPtr;
+
 class Communicator : public AbstractFunctionality {
 
  public:
@@ -35,6 +38,12 @@ class Communicator : public AbstractFunctionality {
    * @return - the name
    */
   std::string getNodeName();
+
+  /**
+   * Returns the type of the communicator functionality
+   * @return the type
+   */
+  FunctionalityType getType() override;
 
 };
 

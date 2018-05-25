@@ -7,6 +7,7 @@
 
 #include <string>
 #include <memory>
+#include <AbstractFunctionality.h>
 
 /**
  * The abstract pointer
@@ -17,7 +18,7 @@ typedef std::shared_ptr<AbstractLogger> AbstractLoggerPtr;
 /**
  * Is the base class for every logger
  */
-class AbstractLogger {
+class AbstractLogger : public AbstractFunctionality {
 public:
 
   /**
@@ -44,7 +45,13 @@ public:
    */
   void error(const std::string &text);
 
-protected:
+  /**
+   * Returns the type of the logger
+   * @return the type
+   */
+  FunctionalityType getType() override;
+
+ protected:
 
   /**
    * The name of the logger

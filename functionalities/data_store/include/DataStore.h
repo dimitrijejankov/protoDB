@@ -1,31 +1,23 @@
-//
-// Created by dimitrije on 5/24/18.
-//
-
-
 #ifndef PROTODB_DATASTORE_H
 #define PROTODB_DATASTORE_H
 
 #include <unordered_map>
 #include <vector>
+#include "AbstractFunctionality.h"
 #include "AbstractColumn.h"
 #include "SetSchema.h"
 
 typedef std::vector<AbstractColumnPtr> Columns;
 
-class DataStore {
+/**
+ * The shared pointer to the data store
+ */
+class DataStore;
+typedef std::shared_ptr<DataStore> DataStorePtr;
 
+class DataStore : public AbstractFunctionality {
 
-  /**
-   * This links the set with their respective columns
-   */
-  std::unordered_map<std::string, Columns> sets;
-
-  /**
-   * This links the sets with the respective schema
-   */
-  std::unordered_map<std::string, SetSchema> schema;
-
+public:
   /**
    * Returns the appropriate columns for a particular set
    * @return the columns
@@ -43,6 +35,24 @@ class DataStore {
    * @param schema - the schema
    */
   void addSet(SetSchema schema);
+
+  /**
+   * Returns the type of the DataStore functionality
+   * @return the type
+   */
+  FunctionalityType getType() override;
+
+private:
+
+  /**
+   * This links the set with their respective columns
+   */
+  std::unordered_map<std::string, Columns> sets;
+
+  /**
+   * This links the sets with the respective schema
+   */
+  std::unordered_map<std::string, SetSchema> schema;
 
 };
 
