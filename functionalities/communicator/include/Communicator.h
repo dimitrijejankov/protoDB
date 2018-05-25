@@ -18,7 +18,7 @@ class Communicator : public AbstractFunctionality {
   /**
    * The destructor this shuts down our communicator
    */
-  virtual ~Communicator();
+  ~Communicator() override;
 
   /**
    * Returns the number of nodes in this cluster

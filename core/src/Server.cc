@@ -15,10 +15,9 @@ void Server::run() {
   auto logger = getFunctionality(LOGGER)->to<AbstractLogger>();
   auto communicator = getFunctionality(COMMUNICATOR)->to<Communicator>();
 
-  // print off a hello world message
-  logger->info("Hello world from processor");
-  logger->info(std::to_string(communicator->getNodeID()));
-  logger->info(std::to_string(communicator->getNumNodes()));
-  logger->info(communicator->getNodeName());
+  // print the hallo world form the logger
+  logger->info() << "Hello world from processor " << communicator->getNodeName().c_str() << ", rank "
+                 << communicator->getNodeID() << " out of " << communicator->getNumNodes() << " processors"
+                 << logger->endl;
 }
 

@@ -18,6 +18,12 @@ typedef std::shared_ptr<DataStore> DataStorePtr;
 class DataStore : public AbstractFunctionality {
 
 public:
+
+  /**
+   * Just the default destructor
+   */
+  ~DataStore() override = default;
+
   /**
    * Returns the appropriate columns for a particular set
    * @return the columns

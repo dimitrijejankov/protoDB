@@ -34,8 +34,4 @@ int main() {
 
   // run the server
   server.run();
-
-  // Print off a hello world message
-  printf("Hello world from processor %s, rank %d out of %d processors\n", communicator->getNodeName().c_str(),
-         communicator->getNodeID(), communicator->getNumNodes());
 }

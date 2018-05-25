@@ -26,6 +26,11 @@ class AbstractFunctionality {
 public:
 
   /**
+   * Virtual destructor - must be implemented by each functionality
+   */
+  virtual ~AbstractFunctionality() = default;
+
+  /**
    * Returns the type of the functionality
    * @return the type
    */
