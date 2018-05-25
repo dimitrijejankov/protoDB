@@ -3,6 +3,12 @@
 
 #include <memory>
 
+enum ColumnType {
+
+  INTEGER_COLUMN_TYPE,
+  MATRIX_COLUMN_TYPE
+};
+
 /**
  * Defining a shared pointer for this class
  */
