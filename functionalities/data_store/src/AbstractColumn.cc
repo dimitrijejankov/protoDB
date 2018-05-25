@@ -3,3 +3,5 @@
 //
 
 #include "AbstractColumn.h"
+
+AbstractColumn::AbstractColumn(const std::string &name) : name(name) {}

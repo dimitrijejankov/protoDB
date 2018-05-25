@@ -4,6 +4,16 @@
 #include <memory>
 
 /**
+ * The types of functionalities
+ */
+enum FunctionalityType {
+
+  DATA_STORE,
+  LOGGER
+};
+
+
+/**
  * A pointer to the shared
  */
 class AbstractFunctionality;

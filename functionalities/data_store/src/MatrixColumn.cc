@@ -3,3 +3,5 @@
 //
 
 #include "MatrixColumn.h"
+
+MatrixColumn::MatrixColumn(const std::string &name) : AbstractColumn(name) {}

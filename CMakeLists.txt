@@ -33,6 +33,7 @@ file(GLOB_RECURSE all_headers "*.h")
 
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/data_store/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/logger/include)
+include_directories(${PROJECT_SOURCE_DIR}/functionalities/communicator/include)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/btree)
 include_directories(${PROJECT_SOURCE_DIR}/core/include)
 

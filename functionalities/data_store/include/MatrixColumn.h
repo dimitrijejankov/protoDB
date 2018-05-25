@@ -5,7 +5,13 @@
 #ifndef PROTODB_MATRIXCOLUMN_H
 #define PROTODB_MATRIXCOLUMN_H
 
-class MatrixColumn {
+#include "AbstractColumn.h"
+
+class MatrixColumn : public AbstractColumn  {
+
+public:
+
+  explicit MatrixColumn(const std::string &name);
 
 };
 

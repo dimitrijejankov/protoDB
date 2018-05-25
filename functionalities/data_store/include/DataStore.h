@@ -11,7 +11,7 @@
 #include "AbstractColumn.h"
 #include "SetSchema.h"
 
-typedef std::vector<ColumnStoragePtr> Columns;
+typedef std::vector<AbstractColumnPtr> Columns;
 
 class DataStore {
 
