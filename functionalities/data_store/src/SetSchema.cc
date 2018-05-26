@@ -3,3 +3,7 @@
 //
 
 #include "SetSchema.h"
+
+std::string SetSchema::getSchemaIdentifier() {
+  return databaseName + ":" + setName;
+}

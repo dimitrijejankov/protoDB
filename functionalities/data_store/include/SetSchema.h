@@ -2,6 +2,7 @@
 #define PROTODB_SETSCHEMA_H
 
 #include <unordered_map>
+#include <boost/shared_ptr.hpp>
 
 /**
  * The type of attribute
@@ -11,11 +12,26 @@ enum AttributeType {
   MATRIX_TYPE
 };
 
+
+/**
+ * The set schema shared pointer definition
+ */
+typedef std::shared_ptr<SetSchema> SetSchemaPtr;
+
 /**
  * Represents the set schema
  * currently supports only int and matrix types
  */
 class SetSchema {
+public:
+
+  /**
+   * The identifier of the schema
+   * @return the schema identifier "databaseName:setName"
+   */
+  std::string getSchemaIdentifier();
+
+protected:
 
   /**
    * The attributes that are in the schema
@@ -23,9 +39,17 @@ class SetSchema {
   std::unordered_map<std::string, AttributeType> attributes;
 
   /**
-   * The name of the schema
+   * The name of the set
    */
-  std::string name;
+  std::string setName;
+
+  /**
+   * The database name
+   */
+  std::string databaseName;
+
+
+
 };
 
 #endif //PROTODB_SETSCHEMA_H
