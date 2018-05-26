@@ -9,6 +9,12 @@ class Pipeline {
 public:
 
   /**
+   * Initializes the pipeline with the output schema
+   * @param outputSchema - the output schema
+   */
+  explicit Pipeline(const SetSchemaPtr &outputSchema);
+
+  /**
    * Execute this pipeline
    */
   virtual void execute() = 0;

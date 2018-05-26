@@ -16,6 +16,7 @@ enum AttributeType {
 /**
  * The set schema shared pointer definition
  */
+class SetSchema;
 typedef std::shared_ptr<SetSchema> SetSchemaPtr;
 
 /**

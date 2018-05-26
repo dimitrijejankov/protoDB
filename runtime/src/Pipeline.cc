@@ -3,3 +3,5 @@
 //
 
 #include "Pipeline.h"
+
+Pipeline::Pipeline(const SetSchemaPtr &outputSchema) : outputSchema(outputSchema) {}

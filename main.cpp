@@ -5,6 +5,7 @@
 #include <AbstractLogger.h>
 #include <StandardOutputLogger.h>
 #include <Server.h>
+#include <ResourceManager.h>
 
 int main() {
 
@@ -17,6 +18,10 @@ int main() {
   // create data store
   AbstractFunctionalityPtr dataStore = (new DataStore())->getHandle();
   server.addFunctionality(dataStore);
+
+  // create the resource manager
+  AbstractFunctionalityPtr resourceManager = (new ResourceManager())->getHandle();
+  server.addFunctionality(resourceManager);
 
   // if this is the master
   if(communicator->getNodeID() == 0) {

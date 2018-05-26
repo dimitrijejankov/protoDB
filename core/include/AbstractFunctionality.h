@@ -10,7 +10,8 @@ enum FunctionalityType {
 
   DATA_STORE,
   LOGGER,
-  COMMUNICATOR
+  COMMUNICATOR,
+  RESOURCE_MANAGER
 };
 
 
