@@ -1,18 +1,24 @@
 #include "AbstractFunctionality.h"
 
+#include <utility>
+
 AbstractFunctionalityPtr AbstractFunctionality::getHandle() {
 
   // if we do not have a pointer set
-  if(node.use_count() == 0) {
+  if(handle.use_count() == 0) {
 
     // we make a shared pointer out of this object
     auto it = std::shared_ptr<AbstractFunctionality>(this);
-    node = it;
+    handle = it;
 
     // return the shared pointer
-    return node.lock();
+    return handle.lock();
   }
 
   // return the shared pointer because we already have it
-  return node.lock();
+  return handle.lock();
+}
+
+void AbstractFunctionality::assignToServer(ServerWeakPtr server) {
+  serverHandle = std::move(server);
 }

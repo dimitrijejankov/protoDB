@@ -9,34 +9,34 @@
 
 int main() {
 
-  Server server;
+  ServerPtr server = (new Server())->getHandle();
 
   // create the communicator
   CommunicatorPtr communicator = (new Communicator())->getHandle()->to<Communicator>();
-  server.addFunctionality(communicator);
+  server->addFunctionality(communicator);
 
   // create data store
   AbstractFunctionalityPtr dataStore = (new DataStore())->getHandle();
-  server.addFunctionality(dataStore);
+  server->addFunctionality(dataStore);
 
   // create the resource manager
   AbstractFunctionalityPtr resourceManager = (new ResourceManager())->getHandle();
-  server.addFunctionality(resourceManager);
+  server->addFunctionality(resourceManager);
 
   // if this is the master
   if(communicator->getNodeID() == 0) {
 
     // create the logger
     AbstractFunctionalityPtr logger = (new StandardOutputLogger("Master"))->getHandle();
-    server.addFunctionality(logger);
+    server->addFunctionality(logger);
   }
   else {
 
     // create the logger
     AbstractFunctionalityPtr logger = (new StandardOutputLogger("Worker"))->getHandle();
-    server.addFunctionality(logger);
+    server->addFunctionality(logger);
   }
 
   // run the server
-  server.run();
+  server->run();
 }

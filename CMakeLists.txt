@@ -42,17 +42,8 @@ include_directories(${PROJECT_SOURCE_DIR}/core/include)
 # define a target for our executable
 add_executable(protoDB main.cpp ${source_list})
 
-# link mpi to the protoDB
-target_link_libraries(protoDB ${MPI_LIBRARIES})
-
-# link the jmalloc
-target_link_libraries(protoDB ${JEMALLOC_LIBRARY})
-
-# link threads
-target_link_libraries(protoDB ${CMAKE_THREAD_LIBS_INIT})
-
-# link boost
-target_link_libraries(protoDB ${Boost_LIBRARIES})
+# link the libs
+target_link_libraries(protoDB ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
 # set the mpi compile flags for the target
 if(MPI_COMPILE_FLAGS)

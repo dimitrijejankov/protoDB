@@ -23,6 +23,12 @@ public:
   AbstractFunctionalityPtr getFunctionality(FunctionalityType type);
 
   /**
+   * Returns a handle to this server
+   * @return the handle
+   */
+  ServerPtr getHandle();
+
+  /**
    * Runs the server
    */
   void run();
@@ -33,6 +39,11 @@ private:
    * The functionalities this server has
    */
   std::map<FunctionalityType, AbstractFunctionalityPtr> functionalities;
+
+  /**
+   * A handle to this server when the object is instantiated with new this has to be called to grab the handle
+   */
+  ServerWeakPtr handle;
 };
 
 #endif //PROTODB_ABSTRACTSERVER_H

@@ -7,3 +7,7 @@
 std::string SetSchema::getSchemaIdentifier() {
   return databaseName + ":" + setName;
 }
+
+const std::unordered_map<std::string, AttributeType> &SetSchema::getAttributes() const {
+  return attributes;
+}

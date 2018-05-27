@@ -32,7 +32,13 @@ public:
    */
   std::string getSchemaIdentifier();
 
-protected:
+  /**
+   * Returns the attributes of this schema
+   * @return the attributes
+   */
+  const std::unordered_map<std::string, AttributeType> &getAttributes() const;
+
+ protected:
 
   /**
    * The attributes that are in the schema

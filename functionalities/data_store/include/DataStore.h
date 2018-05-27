@@ -58,7 +58,7 @@ private:
   /**
    * This links the sets with the respective schema
    */
-  std::unordered_map<std::string, SetSchema> schema;
+  std::unordered_map<std::string, SetSchema> schemas;
 
 };
 

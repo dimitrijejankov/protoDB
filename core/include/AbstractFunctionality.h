@@ -22,6 +22,13 @@ class AbstractFunctionality;
 typedef std::shared_ptr<AbstractFunctionality> AbstractFunctionalityPtr;
 typedef std::weak_ptr<AbstractFunctionality> AbstractFunctionalityWeakPtr;
 
+/**
+ * Weak pointer to the server
+ */
+class Server;
+typedef std::shared_ptr<Server> ServerPtr;
+typedef std::weak_ptr<Server> ServerWeakPtr;
+
 class AbstractFunctionality {
 
 public:
@@ -54,12 +61,22 @@ public:
     return std::dynamic_pointer_cast<T>(getHandle());
   }
 
+  /**
+   * Assigns this functionality to a server
+   */
+  void assignToServer(ServerWeakPtr server);
+
 protected:
 
   /**
-   * The weak pointer to the node
+   * The weak pointer to the handle
    */
-  AbstractFunctionalityWeakPtr node;
+  AbstractFunctionalityWeakPtr handle;
+
+  /**
+   * A weak pointer to the server
+   */
+  ServerWeakPtr serverHandle;
 
 };
 
