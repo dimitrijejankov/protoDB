@@ -30,7 +30,7 @@ void DataStore::addSet(SetSchema schema) {
     // ok so we have to check which attribute type we are dealing with
     switch (it.second) {
       MATRIX_TYPE :
-        columns.push_back(std::make_shared<IntegerColumn>());
+        //columns.push_back(std::make_shared<IntegerColumn>());
         break;
 
       INT_TYPE:

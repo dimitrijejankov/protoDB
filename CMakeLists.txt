@@ -39,21 +39,29 @@ include_directories(${PROJECT_SOURCE_DIR}/runtime/include)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/btree)
 include_directories(${PROJECT_SOURCE_DIR}/core/include)
 
-# define a target for our executable
-add_executable(protoDB main.cpp ${source_list})
+# adds one pdb integration test to CMAKE
+function(add_protodb_app app-name app-file)
 
-# link the libs
-target_link_libraries(protoDB ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+    # define a target for our executable
+    add_executable(${app-name} ${app-file} ${source_list})
 
-# set the mpi compile flags for the target
-if(MPI_COMPILE_FLAGS)
-    set_target_properties(protoDB PROPERTIES COMPILE_FLAGS "${MPI_COMPILE_FLAGS}")
-endif()
+    # link the libs
+    target_link_libraries(${app-name} ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
-# set the mpi link flags for the target
-if(MPI_LINK_FLAGS)
-    set_target_properties(protoDB PROPERTIES LINK_FLAGS "${MPI_LINK_FLAGS}")
-endif()
+    # set the mpi compile flags for the target
+    if(MPI_COMPILE_FLAGS)
+        set_target_properties(${app-name} PROPERTIES COMPILE_FLAGS "${MPI_COMPILE_FLAGS}")
+    endif()
+
+    # set the mpi link flags for the target
+    if(MPI_LINK_FLAGS)
+        set_target_properties(${app-name} PROPERTIES LINK_FLAGS "${MPI_LINK_FLAGS}")
+    endif()
+
+endfunction(add_protodb_app)
+
+# add the main app
+add_protodb_app(protoDB main.cpp)
 
 # this target is used for running a cluster
 add_custom_target(run-cluster mpirun -np 2 ${CMAKE_BINARY_DIR}/protoDB)

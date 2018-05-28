@@ -10,7 +10,7 @@
 int main() {
 
   // create data store
-  DataStorePtr dataStore = (new DataStore())->getHandle();
+  //DataStorePtr dataStore = (new DataStore())->getHandle();
 
   // create a set
   //SetSchemaPtr setIdentifier = make_shared<>
