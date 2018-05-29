@@ -26,7 +26,6 @@ class Communicator : public AbstractFunctionality {
    */
   int32_t getNumNodes();
 
-
   /**
    * Returns the id of this node
    * @return the node id
@@ -38,6 +37,18 @@ class Communicator : public AbstractFunctionality {
    * @return - the name
    */
   std::string getNodeName();
+
+  /**
+   * Returns true if this communicator belongs to the master
+   * @return
+   */
+  bool isMaster();
+
+  /**
+   * Returns the id of the master node
+   * @return node id
+   */
+  int32_t masterID();
 
   /**
    * Returns the type of the communicator functionality

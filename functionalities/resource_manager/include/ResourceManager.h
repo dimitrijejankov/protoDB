@@ -8,6 +8,12 @@
 #include <cstdio>
 #include <AbstractFunctionality.h>
 
+/**
+ * The abstract pointer
+ */
+class ResourceManager;
+typedef std::shared_ptr<ResourceManager> ResourceManagerPtr;
+
 class ResourceManager : public AbstractFunctionality {
 
 public:

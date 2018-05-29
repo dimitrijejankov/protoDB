@@ -4,7 +4,13 @@
 Communicator::Communicator() {
 
   // Initialize the MPI environment
-  MPI_Init(nullptr, nullptr);
+  int provided;
+
+  MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
+  if (provided < MPI_THREAD_MULTIPLE) {
+    printf("ERROR: The MPI library does not have full thread support\n");
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
 }
 
 Communicator::~Communicator() {
@@ -46,4 +52,13 @@ std::string Communicator::getNodeName() {
 
 FunctionalityType Communicator::getType() {
   return COMMUNICATOR;
+}
+
+bool Communicator::isMaster() {
+  // the node id of the master is 0
+  return getNodeID() == 0;
+}
+
+int32_t Communicator::masterID() {
+  return 0;
 }

@@ -14,6 +14,17 @@ endif()
 # find threads
 find_package (Threads)
 
+# find open mp
+find_package(OpenMP)
+if (OPENMP_FOUND)
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+endif()
+
+# find gsl
+find_package(GSL REQUIRED)
+
 # find jemalloc
 find_package(JEMALLOC REQUIRED)
 
@@ -28,8 +39,8 @@ find_package(MPI REQUIRED)
 include_directories(${MPI_INCLUDE_PATH})
 
 ### SETTING UP HEADERS AND SOURCE FILES
-file(GLOB_RECURSE source_list "*.cc")
-file(GLOB_RECURSE all_headers "*.h")
+file(GLOB_RECURSE source_list "core/*.cc" "functionalities/*.cc" "runtime/*.cc")
+file(GLOB_RECURSE all_headers "core/*.h" "functionalities/*.h" "runtime/*.h" third-party/*.hpp)
 
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/data_store/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/logger/include)
@@ -46,7 +57,7 @@ function(add_protodb_app app-name app-file)
     add_executable(${app-name} ${app-file} ${source_list})
 
     # link the libs
-    target_link_libraries(${app-name} ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+    target_link_libraries(${app-name} ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES} GSL::gsl GSL::gslcblas)
 
     # set the mpi compile flags for the target
     if(MPI_COMPILE_FLAGS)
@@ -58,14 +69,20 @@ function(add_protodb_app app-name app-file)
         set_target_properties(${app-name} PROPERTIES LINK_FLAGS "${MPI_LINK_FLAGS}")
     endif()
 
+    # this target is used for running a cluster
+    add_custom_target(run-cluster-${app-name} mpirun -np 2 ${CMAKE_BINARY_DIR}/${app-name})
+    add_dependencies(run-cluster-${app-name} ${app-name})
+
 endfunction(add_protodb_app)
 
 # add the main app
 add_protodb_app(protoDB main.cpp)
 
-# this target is used for running a cluster
-add_custom_target(run-cluster mpirun -np 2 ${CMAKE_BINARY_DIR}/protoDB)
-add_dependencies(run-cluster protoDB)
+# add the test data store test
+add_protodb_app(test-data-store tests/TestDataStore.cc)
+
+# add the test to test the communicator with a traditional relional database workload
+add_protodb_app(test-comunicator-traditional tests/TestCommunicatorTraditional.cc)
 
 # add a header only target to enable autocompletion in IDEs
 add_custom_target(header_only SOURCES ${all_headers})
