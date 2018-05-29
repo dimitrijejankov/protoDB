@@ -1,17 +1,15 @@
 #include <mpi.h>
 #include <cstddef>
-#include <stdio.h>
 #include <Communicator.h>
-#include <DataStore.h>
 #include <AbstractLogger.h>
 #include <StandardOutputLogger.h>
-#include <Server.h>
 #include <ResourceManager.h>
+#include <unordered_map>
 #include <thread>
-#include <iostream>
 #include <omp.h>
 #include <gsl/gsl_blas.h>
 #include <fcmm.hpp>
+#include <assert.h>
 
 // the total size of both matrices
 const size_t matrixSize = 8;

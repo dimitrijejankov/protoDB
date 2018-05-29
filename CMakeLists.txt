@@ -84,5 +84,8 @@ add_protodb_app(test-data-store tests/TestDataStore.cc)
 # add the test to test the communicator with a traditional relional database workload
 add_protodb_app(test-comunicator-traditional tests/TestCommunicatorTraditional.cc)
 
+# add the test to test the communicator with a traditional relional database workload
+add_protodb_app(test-comunicator tests/TestCommunicatorNew.cc)
+
 # add a header only target to enable autocompletion in IDEs
 add_custom_target(header_only SOURCES ${all_headers})
