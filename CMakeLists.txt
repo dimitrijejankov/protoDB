@@ -47,7 +47,7 @@ include_directories(${PROJECT_SOURCE_DIR}/functionalities/logger/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/communicator/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/resource_manager/include)
 include_directories(${PROJECT_SOURCE_DIR}/runtime/include)
-include_directories(${PROJECT_SOURCE_DIR}/third-party/btree)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/lockfree)
 include_directories(${PROJECT_SOURCE_DIR}/core/include)
 
 # adds one pdb integration test to CMAKE

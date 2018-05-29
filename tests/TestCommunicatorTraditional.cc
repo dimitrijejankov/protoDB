@@ -11,7 +11,7 @@
 #include <iostream>
 #include <omp.h>
 #include <gsl/gsl_blas.h>
-#include "../third-party/lockfree/fcmm.hpp"
+#include <fcmm.hpp>
 
 // the total size of both matrices
 const size_t matrixSize = 8;
@@ -76,6 +76,13 @@ struct matrix_multiplied_chunk {
   double data[chunkSize * chunkSize];
 };
 
+/**
+ * This method generates a matrix specified with the Functor valueFunc
+ * @tparam Functor takes in two parameters row and col that represent the row and the column of the value in the matrix
+ * returns the value at that position
+ * @param valueFunc - an instance of the above described Functor
+ * @return an array of dynamically allocated matrix chunks that if put together make up the whole matrix
+ */
 template<typename Functor>
 matrix_chunk *generateMatrix(Functor valueFunc) {
 
@@ -108,6 +115,13 @@ matrix_chunk *generateMatrix(Functor valueFunc) {
   return tmp;
 }
 
+/**
+ * Receives the matrices from the initial random shuffle
+ * @param type - the mpi registered type of the matrix_chunk
+ * @param out - is the vector where we put the chunks
+ * @param communicator - an instance of the mpi communicator
+ * @param logger - the logger to log the output
+ */
 void receiveRandom(MPI_Datatype type,
                    std::vector<matrix_chunk> *out,
                    CommunicatorPtr communicator,
@@ -137,6 +151,14 @@ void receiveRandom(MPI_Datatype type,
   logger->info() << "Finished receiving chunks" << logger->endl;
 }
 
+/**
+ * Sends the matrix chunks to random nodes
+ * @param type - the mpi registered type of the matrix_chunk
+ * @param matrix - the matrix chunks we want to shuffle
+ * @param communicator - the communicator
+ * @param logger - the logger
+ * @param seed - the seed for shuffling
+ */
 void shuffleRandom(MPI_Datatype type,
                    matrix_chunk *matrix,
                    CommunicatorPtr communicator,
@@ -187,7 +209,12 @@ void shuffleRandom(MPI_Datatype type,
   }
 }
 
-template <typename T>
+/**
+ * Register the types - this is used here sice the communicator is built for a column store
+ * @tparam T - the type we want to register
+ * @return - the id of the registered type
+ */
+template<typename T>
 MPI_Datatype registerTypes() {
 
   MPI_Datatype chunkType;
@@ -199,6 +226,17 @@ MPI_Datatype registerTypes() {
   return chunkType;
 }
 
+/**
+ * This method creates a matrix and shuffles it to random nodes
+ * @tparam Functor takes in two parameters row and col that represent the row and the column of the value in the matrix
+ * returns the value at that position
+ * @param communicator - an instance of the mpi communicator
+ * @param logger - the logger
+ * @param type - the mpi registered type of the matrix_chunk
+ * @param matrixFunction - an instance of the above described Functor
+ * @param out - this is where the part of the matrix that is on this node will be stored
+ * @param seed - the seed that initializes the randomness
+ */
 template<typename Functor>
 void createAndShuffleMatrix(const CommunicatorPtr &communicator,
                             AbstractLoggerPtr &logger,
@@ -230,6 +268,15 @@ void createAndShuffleMatrix(const CommunicatorPtr &communicator,
   delete[] tmp;
 }
 
+/**
+ * Shuffle the provided matrix chunks by either the row or the column
+ * @tparam colOrRow - if true it will shuffle it by the column otherwise it will shuffle by the row
+ * @param communicator - the communicator of this node
+ * @param resourceManager - the resoruce manager to get the number of cores
+ * @param logger - the logger to write out the progress
+ * @param Local_A - the matrix chunks we want to shuffle
+ * @param type - the registered mpi type of the matrix_chunk
+ */
 template<bool colOrRow>
 void ShuffleMatrix(CommunicatorPtr communicator,
                    const ResourceManagerPtr resourceManager,
@@ -302,6 +349,14 @@ void ShuffleMatrix(CommunicatorPtr communicator,
   }
 }
 
+/**
+ *
+ * @param communicator
+ * @param resourceManager
+ * @param logger
+ * @param type
+ * @param partitioned_A
+ */
 void receiveShuffledMatrix(CommunicatorPtr &communicator,
                            const ResourceManagerPtr &resourceManager,
                            const AbstractLoggerPtr &logger,
@@ -344,6 +399,16 @@ void receiveShuffledMatrix(CommunicatorPtr &communicator,
   }
 }
 
+/**
+ * This multiplies the partitioned matrices A and B and shuffles them based on a_rowId and b_colId
+ * @param communicator - the mpi communicator
+ * @param logger - the logger
+ * @param resourceManager - the resource manager to get the number of cores
+ * @param partitioned_A - the partition A
+ * @param partitioned_B - the partition B
+ * @param a_indexed - table a indexed by the a_rowId and b_colId
+ * @param type - the registered mpi type of matrix_multiplied_chunk
+ */
 void multiplyAndShuffle(CommunicatorPtr communicator,
                         AbstractLoggerPtr logger,
                         ResourceManagerPtr resourceManager,
@@ -379,11 +444,11 @@ void multiplyAndShuffle(CommunicatorPtr communicator,
   // grab the number of nodes
   auto numNodes = communicator->getNumNodes();
 
-  matrix_multiplied_chunk tmp{};
-  gsl_matrix_view c = gsl_matrix_view_array(tmp.data, chunkSize, chunkSize);
-
   #pragma omp parallel for schedule(static, 1)
   for (size_t i = 0; i < partitioned_B->size(); ++i) {
+
+    matrix_multiplied_chunk tmp{};
+    gsl_matrix_view c = gsl_matrix_view_array(tmp.data, chunkSize, chunkSize);
 
     // go through each chunk
     for (size_t j = 0; j < chunksPerDimension; ++j) {
@@ -442,6 +507,14 @@ void multiplyAndShuffle(CommunicatorPtr communicator,
   }
 }
 
+/**
+ * Receives the multiplied matrix chunks
+ * @param communicator - the mpi communicator
+ * @param resourceManager - the resource manager to grab the number of cores
+ * @param logger - an instance of the logger
+ * @param type - the registered mpi type of matrix_multiplied_chunk
+ * @param partitioned_c - this is where we will store the shuffled set c
+ */
 void receiveMultipliedShuffledMatrix(CommunicatorPtr &communicator,
                                      const ResourceManagerPtr &resourceManager,
                                      const AbstractLoggerPtr &logger,
@@ -481,6 +554,90 @@ void receiveMultipliedShuffledMatrix(CommunicatorPtr &communicator,
 
       free(buffer);
     }
+  }
+}
+
+void aggregateChunks(CommunicatorPtr &communicator,
+                     const std::vector<matrix_multiplied_chunk> &partitioned_c,
+                     std::vector<matrix_chunk> &aggregationChunks) {
+
+  // grab the number of nodes
+  auto numNodes = communicator->getNumNodes();
+
+  // this indexes the aggregated matrices
+  std::unordered_map<size_t, std::pair<matrix_chunk*, omp_lock_t*>> c_aggregated;
+
+  // we lock each aggregation chunk individually here is where we store them for connivance
+  std::vector<omp_lock_t> locks;
+
+  size_t idx = 0;
+
+  // go through chunks
+  for (size_t i = 0; i < chunksPerDimension; i++) {
+
+    // go through chunks
+    for (size_t j = 0; j < chunksPerDimension; j++) {
+
+      // is this a chunk on this node
+      if (((i * chunksPerDimension + j) % numNodes) == communicator->getNodeID()) {
+
+        // the new lock we are creating
+        omp_lock_t chunkLock{};
+        omp_init_lock(&chunkLock);
+
+        // add the lock
+        locks.push_back(chunkLock);
+
+        // store a pointer to the chunk
+        auto key = i * chunksPerDimension + j;
+        c_aggregated.insert(make_pair(key,
+                                      std::make_pair<matrix_chunk *, omp_lock_t *>(aggregationChunks.data() + idx,
+                                                                                   &chunkLock)));
+
+        aggregationChunks[idx].rowId = i;
+        aggregationChunks[idx].colId = j;
+
+        // init the memory to zero
+        for (double &k : aggregationChunks[idx].data) {
+          k = 0;
+        }
+
+        // go to the next spot
+        idx++;
+      }
+    }
+  }
+
+  // sum up the chunks
+  #pragma omp prallel for
+  for (auto &it : partitioned_c) {
+
+    // get the key for this
+    auto key = it.a_rowId * chunksPerDimension + it.b_colId;
+
+    // grab the matrix
+    auto matrix = c_aggregated[key].first;
+
+    // grab the lock
+    auto lock = c_aggregated[key].second;
+
+    // lock the chunk
+    omp_set_lock(lock);
+
+    // sum up the matrix
+    for (int i = 0; i < chunkSize * chunkSize; ++i) {
+      matrix->data[i] += it.data[i];
+    }
+
+    // unlock the chunk
+    omp_unset_lock(lock);
+  }
+
+  // go through all the locks and destroy them
+  for (auto &it : locks) {
+
+    // destroy the thing
+    omp_destroy_lock(&it);
   }
 }
 
@@ -590,24 +747,31 @@ int main() {
     shuffleThread.join();
   }
 
-  /// Step 4 create the b-tree as a secondary index
+  /// Step 4 create the map as a secondary index
 
   fcmm::Fcmm<size_t, size_t> a_indexed;
 
-  #pragma omp prallel for
+  #pragma omp parallel for
   for (size_t i = 0; i < partitioned_A.size(); ++i) {
 
     // insert this thing into the b-tree
     a_indexed.insert(std::make_pair(partitioned_A[i].colId * chunksPerDimension + partitioned_A[i].rowId, i));
   }
 
-  /// Step 5 do the multiply and shuffle TODO (have a concurrency issue here)
+  /// Step 5 do the multiply and shuffle
 
   std::vector<matrix_multiplied_chunk> partitioned_c;
 
   {
     // run the shuffle thread
-    std::thread shuffleThread(multiplyAndShuffle, communicator, logger, resourceManager, &partitioned_A, &partitioned_B, &a_indexed, joinMatrixType);
+    std::thread shuffleThread(multiplyAndShuffle,
+                              communicator,
+                              logger,
+                              resourceManager,
+                              &partitioned_A,
+                              &partitioned_B,
+                              &a_indexed,
+                              joinMatrixType);
 
     // receive the multiplied shuffled matrix
     receiveMultipliedShuffledMatrix(communicator, resourceManager, logger, joinMatrixType, partitioned_c);
@@ -618,7 +782,8 @@ int main() {
 
   logger->info() << "number of " << partitioned_c.size() << logger->endl;
 
-  /// Step 6 aggregate
+
+  /// Step 6 aggregate (this part might be a bit simplified so I don't have to worry about memory management)
 
   // grab the number of nodes
   auto numNodes = communicator->getNumNodes();
@@ -626,52 +791,8 @@ int main() {
   // preallocate the aggregation chunks
   std::vector<matrix_chunk> aggregationChunks(chunksPerDimension * chunksPerDimension / numNodes);
 
-  // this indexes the aggregated matrices
-  std::unordered_map<size_t, matrix_chunk*> c_aggregated;
-
-  size_t idx = 0;
-
-  // go through chunks
-  for(size_t i = 0; i < chunksPerDimension; i++){
-    for(size_t j = 0; j < chunksPerDimension; j++) {
-
-      // is this a chunk on this node
-      if(((i * chunksPerDimension + j) % numNodes) == communicator->getNodeID()){
-
-        // store a pointer to the chunk
-        auto key = i * chunksPerDimension + j;
-        c_aggregated[key] = aggregationChunks.data() + idx;
-
-        aggregationChunks[idx].rowId = i;
-        aggregationChunks[idx].colId = j;
-
-        // init the memory to zero
-        for (double &k : aggregationChunks[idx].data) {
-          k = 0;
-        }
-
-        // go to the next spot
-        idx++;
-      }
-    }
-  }
-
-  for(auto &it : partitioned_c) {
-
-    std::cout << it.a_rowId << " : " << it.a_colId << " : " << it.b_rowId << " : "<< it.b_colId << std::endl;
-
-    // get the key for this
-    auto key = it.a_rowId * chunksPerDimension + it.b_colId;
-
-    // grab the matrix
-    auto matrix = c_aggregated[key];
-
-    // sum up the matrix
-    for(int i = 0; i < chunkSize * chunkSize; ++i) {
-      matrix->data[i] += it.data[i];
-    }
-  }
+  // and aggregate all the chunks
+  aggregateChunks(communicator, partitioned_c, aggregationChunks);
 
   return 0;
 }
-
