@@ -8,7 +8,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
 if (COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native ")
 endif()
 
 # find threads
@@ -25,9 +25,6 @@ endif()
 # find gsl
 find_package(GSL REQUIRED)
 
-# find jemalloc
-find_package(JEMALLOC REQUIRED)
-
 # find the boost package
 find_package(Boost COMPONENTS system thread REQUIRED)
 include_directories(${Boost_INCLUDE_DIR})
@@ -40,7 +37,7 @@ include_directories(${MPI_INCLUDE_PATH})
 
 ### SETTING UP HEADERS AND SOURCE FILES
 file(GLOB_RECURSE source_list "core/*.cc" "functionalities/*.cc" "runtime/*.cc")
-file(GLOB_RECURSE all_headers "core/*.h" "functionalities/*.h" "runtime/*.h" third-party/*.hpp)
+file(GLOB_RECURSE all_headers "core/*.h" "functionalities/*.h" "runtime/*.h" third-party/*.hpp third-party/*.h)
 
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/data_store/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/logger/include)
@@ -48,6 +45,7 @@ include_directories(${PROJECT_SOURCE_DIR}/functionalities/communicator/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/resource_manager/include)
 include_directories(${PROJECT_SOURCE_DIR}/runtime/include)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/lockfree)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/bw-tree)
 include_directories(${PROJECT_SOURCE_DIR}/core/include)
 
 # adds one pdb integration test to CMAKE
@@ -57,7 +55,7 @@ function(add_protodb_app app-name app-file)
     add_executable(${app-name} ${app-file} ${source_list})
 
     # link the libs
-    target_link_libraries(${app-name} ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES} GSL::gsl GSL::gslcblas)
+    target_link_libraries(${app-name} ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${GCCLIBATOMIC_LIBRARY} ${Boost_LIBRARIES} GSL::gsl)
 
     # set the mpi compile flags for the target
     if(MPI_COMPILE_FLAGS)

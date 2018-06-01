@@ -5,11 +5,13 @@
 #include <StandardOutputLogger.h>
 #include <ResourceManager.h>
 #include <thread>
+#include <mpi.h>
+#include <fcmm.hpp>
+#include <stx/btree_multimap>
 
 const int32_t ROW_IDX_TAG = 1;
 const int32_t COL_IDX_TAG = 2;
 const int32_t DOUBLE_TAG = 3;
-
 
 struct column_matrix {
 
@@ -39,9 +41,7 @@ struct column_matrix {
   size_t *rowIDs;
 };
 
-class column_matrix_chunks {
-
- public:
+struct column_matrix_chunks {
 
   column_matrix_chunks(size_t size, size_t chunkSize, size_t n) : size(size), chunkSize(chunkSize) {
 
@@ -81,6 +81,36 @@ class column_matrix_chunks {
   std::vector<double> values;
 };
 
+struct BroadcastedIndices {
+
+  BroadcastedIndices(size_t numberOfNodes, size_t numberOfIndices) {
+
+    // allocate the colIDs
+    colIDs.resize(numberOfIndices);
+
+    // allocate the row ids
+    rowIDs.resize(numberOfIndices);
+
+    // allocate the counts for each node
+    nodeCounts.resize(numberOfNodes);
+  }
+
+  /**
+   * How many
+   */
+  std::vector<int32_t> nodeCounts;
+
+  /**
+   * The ids of the columns
+   */
+  std::vector<size_t> colIDs;
+
+  /**
+   * The ids of the rows
+   */
+  std::vector<size_t> rowIDs;
+};
+
 void receiveRandomShuffled(CommunicatorPtr &communicator,
                            std::vector<size_t> &rowIDs,
                            std::vector<size_t> &colIDs,
@@ -104,7 +134,7 @@ void receiveRandomShuffled(CommunicatorPtr &communicator,
 }
 
 template<typename Functor>
-column_matrix* generateMatrix(Functor valueFunc, size_t size, size_t chunkSize) {
+column_matrix *generateMatrix(Functor valueFunc, size_t size, size_t chunkSize) {
 
   // figure out the chunk size
   size_t chunksPerDimension = size / chunkSize;
@@ -156,14 +186,14 @@ void createAndRandomShuffle(CommunicatorPtr communicator,
                             size_t chunksPerDimension,
                             bool (*identityLambda)(size_t, size_t)) {
 
-  column_matrix* matrix = generateMatrix(identityLambda, 4, 2);
+  column_matrix *matrix = generateMatrix(identityLambda, 4, 2);
 
   // initialize the permutation array
-  std::vector<size_t > permutation;
+  std::vector<size_t> permutation;
   permutation.reserve(chunksPerDimension * chunksPerDimension);
 
   // this keeps track on how many were assigned
-  std::vector<size_t > numberOnNode((size_t)communicator->getNumNodes());
+  std::vector<size_t> numberOnNode((size_t) communicator->getNumNodes());
 
   // grab the number of nodes
   auto numNodes = communicator->getNumNodes();
@@ -186,15 +216,15 @@ void createAndRandomShuffle(CommunicatorPtr communicator,
   }
 
   // initialize the chunks
-  std::vector<column_matrix_chunks*> chunks;
-  for(int i = 0; i < numNodes; ++i){
+  std::vector<column_matrix_chunks *> chunks;
+  for (int i = 0; i < numNodes; ++i) {
 
     // create the chunk columns
     chunks.push_back(new column_matrix_chunks(size, chunkSize, numberOnNode[i]));
   }
 
   // go through each value in the permutation
-  for(auto i = 0; i < permutation.size(); ++i) {
+  for (auto i = 0; i < permutation.size(); ++i) {
 
     // store the row id
     chunks[permutation[i]]->rowIDs.emplace_back(matrix->rowIDs[i]);
@@ -209,7 +239,7 @@ void createAndRandomShuffle(CommunicatorPtr communicator,
   }
 
   // send the stuff to the appropriate node
-  for(int i = 0; i < numNodes; ++i) {
+  for (int i = 0; i < numNodes; ++i) {
 
     // send rows
     communicator->send(chunks[i]->colIDs.data(), chunks[i]->colIDs.size(), i, ROW_IDX_TAG);
@@ -220,6 +250,52 @@ void createAndRandomShuffle(CommunicatorPtr communicator,
     // send the values
     communicator->send(chunks[i]->values.data(), chunks[i]->values.size(), i, DOUBLE_TAG);
   }
+}
+
+void createMatrix(CommunicatorPtr &communicator,
+                  size_t &size,
+                  size_t chunkSize,
+                  size_t chunksPerDimension,
+                  std::vector<double> &values,
+                  std::vector<size_t> &rowIDs,
+                  std::vector<size_t> &colIDs) {
+  if (communicator->isMaster()) {
+
+    // create the identity lambda
+    auto identityLambda = [](size_t i, size_t j) { return i == j; };
+
+    // create the matrix and random shuffle it
+    std::thread shuffleReceiveAndThread(createAndRandomShuffle,
+                                        communicator,
+                                        size,
+                                        chunkSize,
+                                        chunksPerDimension,
+                                        identityLambda);
+
+    // receive the shuffled data
+    receiveRandomShuffled(communicator, rowIDs, colIDs, values, size, chunksPerDimension);
+
+    // wait for the shuffle to finish
+    shuffleReceiveAndThread.join();
+  } else {
+
+    // receive the shuffled data
+    receiveRandomShuffled(communicator, rowIDs, colIDs, values, size, chunksPerDimension);
+  }
+}
+
+void broadcastAllIndices(CommunicatorPtr &communicator,
+                         std::vector<size_t> &rowIDs,
+                         std::vector<size_t> &colIDs,
+                         BroadcastedIndices &indices) {
+
+  // grab the stats from each node
+  auto localCount = (int32_t)rowIDs.size();
+  communicator->allGather(localCount, indices.nodeCounts);
+
+  // grab the indices from each node
+  communicator->allGather(rowIDs, indices.rowIDs, indices.nodeCounts);
+  communicator->allGather(colIDs, indices.colIDs, indices.nodeCounts);
 }
 
 /**
@@ -248,37 +324,31 @@ int main() {
   size_t chunkSize = 2;
   size_t chunksPerDimension = size / chunkSize;
 
-  // this is where our stuff will be stored
-  std::vector<size_t> rowIDs;
-  std::vector<size_t> colIDs;
-  std::vector<double> values;
+  // this is where our stuff will be stored for matrix A
+  std::vector<size_t> aRowIDs;
+  std::vector<size_t> aColIDs;
+  std::vector<double> aValues;
 
-  if(communicator->isMaster()) {
+  // this is where our stuff will be stored for matrix B
+  std::vector<size_t> bRowIDs;
+  std::vector<size_t> bColIDs;
+  std::vector<double> bValues;
 
-    // create the identity lambda
-    auto identityLambda = [](size_t i, size_t j) { return i == j; };
+  // create the matrices
+  createMatrix(communicator, size, chunkSize, chunksPerDimension, aValues, aRowIDs, aColIDs);
+  createMatrix(communicator, size, chunkSize, chunksPerDimension, bValues, bRowIDs, bColIDs);
 
-    // create the matrix and random shuffle it
-    std::thread shuffleReceiveAndThread(createAndRandomShuffle,
-                                        communicator,
-                                        size,
-                                        chunkSize,
-                                        chunksPerDimension,
-                                        identityLambda);
+  /// 1. Broadcast all the indices to every node
 
-    // receive the shuffled data
-    receiveRandomShuffled(communicator, rowIDs, colIDs, values, size, chunksPerDimension);
+  // initialize the indices for A
+  BroadcastedIndices aIndices((size_t) communicator->getNumNodes(), size);
+  broadcastAllIndices(communicator, aRowIDs, aColIDs, aIndices);
 
-    // wait for the shuffle to finish
-    shuffleReceiveAndThread.join();
-  }
-  else {
+  // initialize the indices for b
+  BroadcastedIndices bIndices((size_t) communicator->getNumNodes(), size);
+  broadcastAllIndices(communicator, bRowIDs, bColIDs, bIndices);
 
-    // receive the shuffled data
-    receiveRandomShuffled(communicator, rowIDs, colIDs, values, size, chunksPerDimension);
-  }
+  /// 2. Join and Aggregate to get the indices of the final result
 
-  std::cout << rowIDs.size() << " " << colIDs.size() << " " << values.size() << std::endl;
-
-  return 0;
+  int x = 0;
 }

@@ -209,6 +209,37 @@ public:
     }
 };
 
+struct hashPairStd {
+
+public:
+
+  size_t operator()(const std::pair<size_t, size_t>& p) const {
+      size_t seed = 0;
+      seed ^= h(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= h(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      return seed;
+  }
+
+private:
+  std::hash<size_t> h;
+};
+
+struct hashPairDefault {
+
+ public:
+
+  size_t operator()(const std::pair<size_t, size_t>& p) const {
+    size_t seed = 0;
+    seed ^= h(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= h(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    return seed;
+  }
+
+ private:
+
+  DefaultKeyHash2<size_t> h;
+};
+
 /**
  * @brief An almost lock-free concurrent hashmap, providing a limited set of functionalities.
  *
