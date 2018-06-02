@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.9)
 project(protoDB)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 
 # check if we support native architecture
@@ -13,6 +13,9 @@ endif()
 
 # find threads
 find_package (Threads)
+
+# find libatomic
+find_package(GccAtomic)
 
 # find open mp
 find_package(OpenMP)
@@ -45,8 +48,12 @@ include_directories(${PROJECT_SOURCE_DIR}/functionalities/communicator/include)
 include_directories(${PROJECT_SOURCE_DIR}/functionalities/resource_manager/include)
 include_directories(${PROJECT_SOURCE_DIR}/runtime/include)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/lockfree)
-include_directories(${PROJECT_SOURCE_DIR}/third-party/bw-tree)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/bwtree/include)
 include_directories(${PROJECT_SOURCE_DIR}/core/include)
+
+# add the third party libraries
+add_library(bwtree STATIC third-party/bwtree/source/bwtree.cc)
+target_link_libraries(bwtree ${GCCLIBATOMIC_LIBRARY})
 
 # adds one pdb integration test to CMAKE
 function(add_protodb_app app-name app-file)
@@ -55,7 +62,7 @@ function(add_protodb_app app-name app-file)
     add_executable(${app-name} ${app-file} ${source_list})
 
     # link the libs
-    target_link_libraries(${app-name} ${MPI_LIBRARIES} ${JEMALLOC_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${GCCLIBATOMIC_LIBRARY} ${Boost_LIBRARIES} GSL::gsl)
+    target_link_libraries(${app-name} bwtree ${MPI_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} ${GCCLIBATOMIC_LIBRARY} ${Boost_LIBRARIES} GSL::gsl)
 
     # set the mpi compile flags for the target
     if(MPI_COMPILE_FLAGS)

@@ -7,11 +7,19 @@
 #include <thread>
 #include <mpi.h>
 #include <fcmm.hpp>
-#include <stx/btree_multimap>
+#include <bwtree.h>
+#include <omp.h>
+#include <boost/functional/hash/hash.hpp>
 
 const int32_t ROW_IDX_TAG = 1;
 const int32_t COL_IDX_TAG = 2;
 const int32_t DOUBLE_TAG = 3;
+
+typedef protoDB::bwtree::BwTree<size_t, size_t> matrixIndexBTree;
+typedef protoDB::bwtree::BwTree<std::pair<size_t, size_t>, uint8_t,
+                                std::less<std::pair<size_t, size_t>>,
+                                std::equal_to<std::pair<size_t, size_t>>,
+                                boost::hash<std::pair<size_t, size_t>>> aggregatedIndexBtree;
 
 struct column_matrix {
 
@@ -350,5 +358,82 @@ int main() {
 
   /// 2. Join and Aggregate to get the indices of the final result
 
-  int x = 0;
+  // create a btree
+  auto a_indexed = new matrixIndexBTree{true};
+
+  // set the maximum number of threads
+  a_indexed->UpdateThreadLocal((size_t) omp_get_max_threads());
+
+  // do the parallel insert
+  #pragma omp parallel
+  {
+
+    // register the thread
+    a_indexed->AssignGCID(omp_get_thread_num());
+
+    #pragma omp for
+    for(int i = 0; i < aIndices.rowIDs.size(); ++i)
+    {
+      // store the thing into the btree
+      a_indexed->Insert(aIndices.colIDs[i], aIndices.rowIDs[i]);
+    }
+
+    // unregister the thread
+    a_indexed->UnregisterThread(omp_get_thread_num());
+  }
+
+  // aggregator map
+  std::map<std::pair<size_t, size_t>, int> aggregator;
+
+  // execute the probing and aggregating
+  #pragma omp parallel
+  {
+
+    // register the thread
+    a_indexed->AssignGCID(omp_get_thread_num());
+
+    // local aggregation map
+    std::map<std::pair<size_t, size_t>, int> localAggregator;
+
+    // go through the indices in be join and then aggregate
+    #pragma omp for
+    for (int i = 0; i < bIndices.rowIDs.size(); ++i) {
+
+      // grab the iterator
+      auto it = a_indexed->Begin(bIndices.rowIDs[i]);
+
+      // go through each match
+      while(!it.IsEnd() && it->first == bIndices.rowIDs[i]) {
+
+        // we are joining two tuples
+        auto key = std::make_pair(it->second, bIndices.colIDs[i]);
+
+        // if we don't have it set it to 0
+        localAggregator.try_emplace(key, 0);
+
+        // increment the thing
+        localAggregator.find(key)->second =+ 1;
+
+        // go to the next one
+        it++;
+      }
+    }
+
+    // unregister the thread
+    a_indexed->UnregisterThread(omp_get_thread_num());
+
+    // the merging has to be executed sequentially
+    #pragma omp critical
+
+    for(auto it : localAggregator) {
+
+      // if we don't have it set it to 0
+      aggregator.try_emplace(it.first, 0);
+
+      // sum it up
+      aggregator.find(it.first)->second += it.second;
+    }
+
+  }
+
 }
