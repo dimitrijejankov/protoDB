@@ -12,22 +12,24 @@
 #include <assert.h>
 
 // the total size of both matrices
-const size_t matrixSize = 8;
+const size_t matrixSize = 16000;
 
 // the chunk size
-const size_t chunkSize = 2;
+const size_t chunkSize = 4000;
 
 // the number of chunks per dimension our matrices have
 const size_t chunksPerDimension = matrixSize / chunkSize;
 
 // the partition size in terms of chunks
-const size_t partitionSize = 32;
+const size_t partitionSize = 64;
 
 // chunk tag
 const int notificationTag = 12;
 const int chunkTag = 11;
 
 struct matrix_chunk {
+
+  matrix_chunk() {}
 
   /**
    * The row id of the chunk
@@ -47,6 +49,8 @@ struct matrix_chunk {
 };
 
 struct matrix_multiplied_chunk {
+
+  matrix_multiplied_chunk() {}
 
   /**
    * The row id of the chunk
@@ -126,7 +130,8 @@ void receiveRandom(MPI_Datatype type,
                    AbstractLoggerPtr logger) {
 
   int numValues = 1;
-  matrix_chunk tmp{};
+  matrix_chunk *tmp_ptr = new matrix_chunk();
+  auto &tmp = *tmp_ptr;
 
   // wait for a notify message
   MPI_Recv(&numValues, 1, MPI_INT, communicator->masterID(), notificationTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -145,6 +150,9 @@ void receiveRandom(MPI_Datatype type,
     // log what we got
     logger->info() << "Got chunk with rowID : " << tmp.rowId << " colID : " << tmp.colId << logger->endl;
   }
+
+  // free the tmp thing
+  delete tmp_ptr;
 
   logger->info() << "Finished receiving chunks" << logger->endl;
 }
@@ -377,7 +385,7 @@ void receiveShuffledMatrix(CommunicatorPtr &communicator,
       MPI_Status status{};
 
       // wait for a block message
-      MPI_Recv(buffer, size, type, i, chunkTag, MPI_COMM_WORLD, &status);
+      MPI_Recv(buffer, partitionSize / communicator->getNumNodes(), type, i, chunkTag, MPI_COMM_WORLD, &status);
 
       // grab the count
       int count;
@@ -445,7 +453,9 @@ void multiplyAndShuffle(CommunicatorPtr communicator,
   #pragma omp parallel for schedule(static, 1)
   for (size_t i = 0; i < partitioned_B->size(); ++i) {
 
-    matrix_multiplied_chunk tmp{};
+    matrix_multiplied_chunk *tmp_ptr = new matrix_multiplied_chunk();
+    auto &tmp = *tmp_ptr;
+
     gsl_matrix_view c = gsl_matrix_view_array(tmp.data, chunkSize, chunkSize);
 
     // go through each chunk
@@ -486,6 +496,8 @@ void multiplyAndShuffle(CommunicatorPtr communicator,
         c_partitions[tid][node].emplace_back(tmp);
       }
     }
+
+    delete tmp_ptr;
   }
 
   // log what we are doing
@@ -535,7 +547,7 @@ void receiveMultipliedShuffledMatrix(CommunicatorPtr &communicator,
       MPI_Status status{};
 
       // wait for a block message
-      MPI_Recv(buffer, size, type, i, chunkTag, MPI_COMM_WORLD, &status);
+      MPI_Recv(buffer, partitionSize / communicator->getNumNodes(), type, i, chunkTag, MPI_COMM_WORLD, &status);
 
       // grab the count
       int count;
@@ -745,6 +757,9 @@ int main() {
     shuffleThread.join();
   }
 
+  Local_A = std::vector<matrix_chunk>();
+  Local_B = std::vector<matrix_chunk>();
+
   /// Step 4 create the map as a secondary index
 
   fcmm::Fcmm<size_t, size_t> a_indexed;
@@ -777,6 +792,9 @@ int main() {
     // wait to finish the shuffling
     shuffleThread.join();
   }
+
+  partitioned_A =  std::vector<matrix_chunk>();
+  partitioned_B =  std::vector<matrix_chunk>();
 
   logger->info() << "number of " << partitioned_c.size() << logger->endl;
 

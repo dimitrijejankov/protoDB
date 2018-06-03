@@ -119,6 +119,39 @@ class Communicator : public AbstractFunctionality {
   }
 
   /**
+   * Receives a single value that is sent with the @see send method
+   * @param values - the vector where we are storing the values
+   * @param source - the node which is sending the data
+   * @param tag - the tag of the message
+   */
+  template<typename T>
+  T recv(int32_t source, int32_t tag) {
+
+    // to store the value
+    T tmp;
+
+    // just an empty status and message structure
+    MPI_Status status{};
+    MPI_Message msg{};
+
+    // get the type of the data
+    MPI_Datatype type = this->getDataType<T>();
+
+    // probe the message
+    MPI_Mprobe(source, tag, MPI_COMM_WORLD, &msg, &status);
+
+    // grab the count
+    int32_t number_amount;
+    MPI_Get_count(&status, type, &number_amount);
+
+    // grab how many we got
+    MPI_Mrecv(&tmp, 1, type, &msg, MPI_STATUS_IGNORE);
+
+    // return the value
+    return tmp;
+  }
+
+  /**
    * This method does an all gather on a single value into a vector
    * @tparam T - the type we are gathering
    * @param value - the value on this node

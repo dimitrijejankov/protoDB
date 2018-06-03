@@ -10,84 +10,18 @@
 #include <bwtree.h>
 #include <omp.h>
 #include <boost/functional/hash/hash.hpp>
+#include <mutex>
 
 const int32_t ROW_IDX_TAG = 1;
 const int32_t COL_IDX_TAG = 2;
 const int32_t DOUBLE_TAG = 3;
+const int32_t COUNTS_TAG = 4;
 
-typedef protoDB::bwtree::BwTree<size_t, size_t> matrixIndexBTree;
-typedef protoDB::bwtree::BwTree<std::pair<size_t, size_t>, uint8_t,
-                                std::less<std::pair<size_t, size_t>>,
-                                std::equal_to<std::pair<size_t, size_t>>,
-                                boost::hash<std::pair<size_t, size_t>>> aggregatedIndexBtree;
+// dimensions of the matrices A and B
+size_t size = 4;
+size_t chunkSize = 2;
 
-struct column_matrix {
-
-  /**
-   * The size of the matrix (rows num and col num)
-   */
-  size_t size;
-
-  /**
-   * The size of each chunk
-   */
-  size_t chunkSize;
-
-  /**
-   * The values in this
-   */
-  double *values;
-
-  /**
-   * The column IDs
-   */
-  size_t *colIDs;
-
-  /**
-   * The rowIDs of the chunks
-   */
-  size_t *rowIDs;
-};
-
-struct column_matrix_chunks {
-
-  column_matrix_chunks(size_t size, size_t chunkSize, size_t n) : size(size), chunkSize(chunkSize) {
-
-    // reserve the column ids
-    colIDs.reserve(n);
-
-    // reserve the row ids
-    rowIDs.reserve(n);
-
-    // reserve values
-    values.reserve(chunkSize * chunkSize * n);
-  }
-
-  /**
-   * The size of the matrix (rows num and col num)
-   */
-  size_t size;
-
-  /**
-   * The size of each chunk
-   */
-  size_t chunkSize;
-
-  /**
-   * The ids of the columns
-   */
-  std::vector<size_t> colIDs;
-
-  /**
-   * The ids of the rows
-   */
-  std::vector<size_t> rowIDs;
-
-  /**
-   * The values
-   */
-  std::vector<double> values;
-};
+typedef protoDB::bwtree::BwTree<size_t, int> matrixIndexBTree;
 
 struct BroadcastedIndices {
 
@@ -123,172 +57,133 @@ void receiveRandomShuffled(CommunicatorPtr &communicator,
                            std::vector<size_t> &rowIDs,
                            std::vector<size_t> &colIDs,
                            std::vector<double> &values,
-                           size_t size,
-                           size_t chunksPerDimension) {
+                           size_t chunkSize) {
 
-  // reserve the right amount of stuff
-  rowIDs.reserve(chunksPerDimension * chunksPerDimension);
-  colIDs.reserve(chunksPerDimension * chunksPerDimension);
-  values.reserve(size * size);
+  // grab the number of tuples
+  auto num = communicator->recv<size_t>(0, COUNTS_TAG);
 
-  // grab the rows
-  communicator->recv(rowIDs, 0, ROW_IDX_TAG);
+  // reserve the approximate amount of memory
+  rowIDs.reserve(num);
+  colIDs.reserve(num);
+  values.reserve(chunkSize * chunkSize * num);
 
-  // grab the columns
-  communicator->recv(colIDs, 0, COL_IDX_TAG);
+  // tmp chunk
+  std::vector<double> tmp;
 
-  // grab the double
-  communicator->recv(values, 0, DOUBLE_TAG);
+  // receive each value
+  for(int i = 0; i < num; ++i) {
+
+    // grab the rows
+    auto rowID = communicator->recv<size_t>(0, ROW_IDX_TAG);
+
+    // grab the columns
+    auto colID = communicator->recv<size_t>(0, COL_IDX_TAG);
+
+    // grab the double chunk
+    communicator->recv(tmp, 0, DOUBLE_TAG);
+
+    // copy the chunk
+    rowIDs.push_back(rowID);
+    colIDs.push_back(colID);
+    values.insert(values.end(), tmp.begin(), tmp.end());
+  }
 }
 
-template<typename Functor>
-column_matrix *generateMatrix(Functor valueFunc, size_t size, size_t chunkSize) {
+void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chunkSize, CommunicatorPtr communicator) {
 
   // figure out the chunk size
   size_t chunksPerDimension = size / chunkSize;
 
-  // the matrix tmp in chunks this will be
-  auto tmp = new column_matrix();
+  // grab the number of nodes
+  auto numNodes = (size_t) communicator->getNumNodes();
 
-  // initialize the sizes
-  tmp->chunkSize = chunkSize;
-  tmp->size = size;
+  /// 1. Generate a random permutation for each node and store the counts
 
-  // allocate the values and the columns
-  tmp->values = new double[size * size];
-  tmp->rowIDs = new size_t[chunksPerDimension * chunksPerDimension];
-  tmp->colIDs = new size_t[chunksPerDimension * chunksPerDimension];
+  // allocate the memory for the permutation
+  std::vector<int32_t> permutation(chunkSize * chunkSize);
 
-  // generate matrix tmp
-  for (size_t i = 0; i < size; ++i) {
+  // allocate the memory for the counts
+  std::vector<size_t> counts(numNodes);
 
-    // row id
-    size_t rowID = i / chunkSize;
+  // go through each chunk
+  for(auto c_i = 0; c_i < chunksPerDimension; ++c_i) {
 
-    for (size_t j = 0; j < size; ++j) {
+    // go through each chunk
+    for(auto c_j = 0; c_j < chunksPerDimension; ++c_j) {
 
-      size_t colID = j / chunkSize;
+      // the node we are sending this chunk to
+      int32_t node = rand() % (int32_t) numNodes;
 
-      // set the row id and column id (we set this multiple times to avoid complicated logic)
-      tmp->rowIDs[rowID * chunksPerDimension + colID] = colID;
-      tmp->colIDs[rowID * chunksPerDimension + colID] = rowID;
+      // set the permutation
+      permutation[c_i * chunksPerDimension + c_j] = node;
 
-      // get the indices within the chunk
-      size_t block_i = i - rowID * chunkSize;
-      size_t block_j = j - colID * chunkSize;
-
-      size_t block_offset = (rowID * chunksPerDimension + colID) * chunkSize * chunkSize;
-      size_t data_offset = block_i * chunkSize + block_j;
-
-      // set the value
-      tmp->values[block_offset + data_offset] = valueFunc(i, j);
+      // increase the counts
+      counts[node]++;
     }
   }
 
-  return tmp;
-}
+  /// 2. Send our counts
 
-void createAndRandomShuffle(CommunicatorPtr communicator,
-                            size_t size,
-                            size_t chunkSize,
-                            size_t chunksPerDimension,
-                            bool (*identityLambda)(size_t, size_t)) {
+  // go through each node
+  for(auto node = 0; node < numNodes; ++node) {
 
-  column_matrix *matrix = generateMatrix(identityLambda, 4, 2);
-
-  // initialize the permutation array
-  std::vector<size_t> permutation;
-  permutation.reserve(chunksPerDimension * chunksPerDimension);
-
-  // this keeps track on how many were assigned
-  std::vector<size_t> numberOnNode((size_t) communicator->getNumNodes());
-
-  // grab the number of nodes
-  auto numNodes = communicator->getNumNodes();
-
-  // seed with a constant so we can repeat the experiment
-  uint32_t seed = 205;
-  srand(seed);
-
-  // generate a random permutation
-  for (int i = 0; i < chunksPerDimension * chunksPerDimension; ++i) {
-
-    // node to send to
-    int node = rand() % numNodes;
-
-    // ok this is the selected node
-    permutation.push_back((size_t) node);
-
-    // we added one more to this node
-    numberOnNode[node] += 1;
+    // send node
+    communicator->send(counts[node], node, COUNTS_TAG);
   }
 
-  // initialize the chunks
-  std::vector<column_matrix_chunks *> chunks;
-  for (int i = 0; i < numNodes; ++i) {
+  /// 3. Generate chunks and send them
 
-    // create the chunk columns
-    chunks.push_back(new column_matrix_chunks(size, chunkSize, numberOnNode[i]));
-  }
+  // allocate a temporary chunk
+  std::vector<double> tmp = std::vector<double>(chunkSize * chunkSize);
 
-  // go through each value in the permutation
-  for (auto i = 0; i < permutation.size(); ++i) {
+  // go through each chunk
+  for(size_t c_i = 0; c_i < chunksPerDimension; ++c_i) {
 
-    // store the row id
-    chunks[permutation[i]]->rowIDs.emplace_back(matrix->rowIDs[i]);
+    // go through each chunk
+    for(size_t c_j = 0; c_j < chunksPerDimension; ++c_j) {
 
-    // store the column id
-    chunks[permutation[i]]->colIDs.emplace_back(matrix->colIDs[i]);
+      // initialize the chunk
+      for(auto i = 0; i < chunkSize; ++i) {
+        for(auto j = 0; j < chunkSize; ++j) {
 
-    // store the matrix
-    chunks[permutation[i]]->values.insert(chunks[permutation[i]]->values.end(),
-                                          &matrix->values[i * chunkSize * chunkSize],
-                                          &matrix->values[i * chunkSize * chunkSize] + chunkSize * chunkSize);
-  }
+          // calculate the index of the value within the chunk
+          auto valueIndex = i * chunkSize + j;
 
-  // send the stuff to the appropriate node
-  for (int i = 0; i < numNodes; ++i) {
+          // set the value
+          tmp[valueIndex] = valueFunc(c_i * chunkSize + i, c_j * chunkSize + j);
+        }
+      }
 
-    // send rows
-    communicator->send(chunks[i]->colIDs.data(), chunks[i]->colIDs.size(), i, ROW_IDX_TAG);
-
-    // send cols
-    communicator->send(chunks[i]->rowIDs.data(), chunks[i]->rowIDs.size(), i, COL_IDX_TAG);
-
-    // send the values
-    communicator->send(chunks[i]->values.data(), chunks[i]->values.size(), i, DOUBLE_TAG);
+      // send the chunk
+      communicator->send(c_i, permutation[c_i * chunksPerDimension + c_j], ROW_IDX_TAG);
+      communicator->send(c_j, permutation[c_i * chunksPerDimension + c_j], COL_IDX_TAG);
+      communicator->send(tmp.data(), tmp.size(), permutation[c_i * chunksPerDimension + c_j], DOUBLE_TAG);
+    }
   }
 }
 
-void createMatrix(CommunicatorPtr &communicator,
+void createMatrix(size_t (*valueFunc)(size_t, size_t),
+                  CommunicatorPtr &communicator,
                   size_t &size,
                   size_t chunkSize,
-                  size_t chunksPerDimension,
                   std::vector<double> &values,
                   std::vector<size_t> &rowIDs,
                   std::vector<size_t> &colIDs) {
+
   if (communicator->isMaster()) {
 
-    // create the identity lambda
-    auto identityLambda = [](size_t i, size_t j) { return i == j; };
-
     // create the matrix and random shuffle it
-    std::thread shuffleReceiveAndThread(createAndRandomShuffle,
-                                        communicator,
-                                        size,
-                                        chunkSize,
-                                        chunksPerDimension,
-                                        identityLambda);
+    std::thread shuffleReceiveAndThread(generateMatrix, valueFunc, size, chunkSize, communicator);
 
     // receive the shuffled data
-    receiveRandomShuffled(communicator, rowIDs, colIDs, values, size, chunksPerDimension);
+    receiveRandomShuffled(communicator, rowIDs, colIDs, values, chunkSize);
 
     // wait for the shuffle to finish
     shuffleReceiveAndThread.join();
   } else {
 
     // receive the shuffled data
-    receiveRandomShuffled(communicator, rowIDs, colIDs, values, size, chunksPerDimension);
+    receiveRandomShuffled(communicator, rowIDs, colIDs, values, chunkSize);
   }
 }
 
@@ -327,9 +222,7 @@ int main() {
   // create the resource manager
   ResourceManagerPtr resourceManager = (new ResourceManager())->getHandle()->to<ResourceManager>();
 
-  // dimensions of the matrices A and B
-  size_t size = 4;
-  size_t chunkSize = 2;
+  // chunks per dimension
   size_t chunksPerDimension = size / chunkSize;
 
   // this is where our stuff will be stored for matrix A
@@ -342,9 +235,15 @@ int main() {
   std::vector<size_t> bColIDs;
   std::vector<double> bValues;
 
+  // create the identity lambda
+  auto identityLambda = [](size_t i, size_t j) { return (size_t) (i == j); };
+
+  // the matrix b will will fit a sequence of 0,1,2,3,4,5 row-wise
+  auto sequenceLambda = [](size_t i, size_t j) { return i * size + j; };
+
   // create the matrices
-  createMatrix(communicator, size, chunkSize, chunksPerDimension, aValues, aRowIDs, aColIDs);
-  createMatrix(communicator, size, chunkSize, chunksPerDimension, bValues, bRowIDs, bColIDs);
+  createMatrix(identityLambda, communicator, size, chunkSize, aValues, aRowIDs, aColIDs);
+  createMatrix(sequenceLambda, communicator, size, chunkSize, bValues, bRowIDs, bColIDs);
 
   /// 1. Broadcast all the indices to every node
 
@@ -375,7 +274,7 @@ int main() {
     for(int i = 0; i < aIndices.rowIDs.size(); ++i)
     {
       // store the thing into the btree
-      a_indexed->Insert(aIndices.colIDs[i], aIndices.rowIDs[i]);
+      a_indexed->Insert(aIndices.colIDs[i], i);
     }
 
     // unregister the thread
@@ -405,8 +304,11 @@ int main() {
       // go through each match
       while(!it.IsEnd() && it->first == bIndices.rowIDs[i]) {
 
+        // grab the row id
+        auto rowID = aIndices.rowIDs[it->second];
+
         // we are joining two tuples
-        auto key = std::make_pair(it->second, bIndices.colIDs[i]);
+        auto key = std::make_pair(rowID, bIndices.colIDs[i]);
 
         // if we don't have it set it to 0
         localAggregator.try_emplace(key, 0);
@@ -424,16 +326,52 @@ int main() {
 
     // the merging has to be executed sequentially
     #pragma omp critical
+    {
+      for(auto it : localAggregator) {
 
-    for(auto it : localAggregator) {
+        // if we don't have it set it to 0
+        aggregator.try_emplace(it.first, 0);
 
-      // if we don't have it set it to 0
-      aggregator.try_emplace(it.first, 0);
-
-      // sum it up
-      aggregator.find(it.first)->second += it.second;
+        // sum it up
+        aggregator.find(it.first)->second += it.second;
+      }
     }
-
   }
+
+  /// 3. Preallocate the memory for the aggregation
+
+  // aggregator map
+  std::map<std::pair<size_t, size_t>, std::vector<double>> aggregateMatrix;
+
+  for(auto &it : aggregator) {
+
+    // figure out on which node this belongs to
+    auto onNode = (it.first.first + it.first.second) % communicator->getNumNodes();
+
+    // is this our node
+    if(onNode == communicator->getNodeID()) {
+
+      // make a new vector
+      aggregateMatrix.emplace(it.first, std::vector<double>());
+
+      // allocate the right chunk size
+      aggregateMatrix.find(it.first)->second.resize(chunkSize * chunkSize);
+    }
+  }
+
+  /// 4. Setup the pear to pear communication
+
+  // we are using two buffers one we are processing and one we are waiting
+  std::vector<std::shared_ptr<std::vector<double>>> buffers;
+
+  // allocate the first buffer
+  auto tmp = std::make_shared<std::vector<double>>();
+  tmp->resize(chunkSize * chunkSize);
+  buffers.push_back(tmp);
+
+  // allocate the second buffer
+  tmp = std::make_shared<std::vector<double>>();
+  tmp->resize(chunkSize * chunkSize);
+  buffers.push_back(tmp);
 
 }
