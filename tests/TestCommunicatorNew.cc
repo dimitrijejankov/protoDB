@@ -22,6 +22,7 @@ size_t size = 4;
 size_t chunkSize = 2;
 
 typedef protoDB::bwtree::BwTree<size_t, int> matrixIndexBTree;
+typedef protoDB::bwtree::BwTree<int, size_t> matrixReverseIndexBTree;
 
 struct BroadcastedIndices {
 
@@ -38,9 +39,14 @@ struct BroadcastedIndices {
   }
 
   /**
-   * How many
+   * How many are there on each node
    */
   std::vector<int32_t> nodeCounts;
+
+  /**
+   * On which node is the particular tuple
+   */
+   std::vector<int32_t> nodes;
 
   /**
    * The ids of the columns
@@ -199,6 +205,70 @@ void broadcastAllIndices(CommunicatorPtr &communicator,
   // grab the indices from each node
   communicator->allGather(rowIDs, indices.rowIDs, indices.nodeCounts);
   communicator->allGather(colIDs, indices.colIDs, indices.nodeCounts);
+
+  // initialize the node assignments
+  for(auto i = 0; i < indices.nodeCounts.size(); ++i) {
+    indices.nodes.insert(indices.nodes.end(), indices.nodeCounts[i], i);
+  }
+}
+
+void joinSenderStage(CommunicatorPtr communicator,
+                     int32_t node,
+                     size_t chunkSize,
+                     std::vector<size_t> *bRowIDs,
+                     std::vector<size_t> *bColIDs,
+                     std::vector<double> *bValues,
+                     matrixReverseIndexBTree *reverseB) {
+
+  // register node
+  reverseB->AssignGCID(node);
+
+  // get squared chunk size
+  auto chunkSquared = chunkSize * chunkSize;
+
+  // we just copy all the indices here
+  std::vector<size_t> indices;
+
+  // grab an iterator to the node
+  reverseB->GetValue(node, indices);
+
+  // unregister node
+  reverseB->UnregisterThread(node);
+
+  // send the counts
+  communicator->send(indices.size(), node, COUNTS_TAG);
+
+  // go through all the things we need to send
+  for(auto &it : indices) {
+
+    // grab the chunk index
+    auto chunkIndex = it;
+
+    // send stuff
+    communicator->send((*bRowIDs)[chunkIndex], node, ROW_IDX_TAG);
+    communicator->send((*bColIDs)[chunkIndex], node, COL_IDX_TAG);
+    communicator->send(&bValues->data()[chunkSquared * chunkIndex], chunkSquared, node, DOUBLE_TAG);
+  }
+}
+
+void joinReceiverStage(CommunicatorPtr communicator,
+                       int32_t node,
+                       size_t chunkSize) {
+
+  // get squared chunk size
+  auto chunkSquared = chunkSize * chunkSize;
+  std::vector<double> tmp(chunkSquared);
+
+  auto counts = communicator->recv<size_t>(node, COUNTS_TAG);
+
+  for(size_t i = 0; i < counts; ++i) {
+
+    auto rowID = communicator->recv<size_t>(node, ROW_IDX_TAG);
+    auto colID = communicator->recv<size_t>(node, COL_IDX_TAG);
+
+    communicator->recv(tmp, node, DOUBLE_TAG);
+  }
+
 }
 
 /**
@@ -258,48 +328,64 @@ int main() {
   /// 2. Join and Aggregate to get the indices of the final result
 
   // create a btree
-  auto a_indexed = new matrixIndexBTree{true};
+  auto aIndexed = new matrixIndexBTree{true};
 
   // set the maximum number of threads
-  a_indexed->UpdateThreadLocal((size_t) omp_get_max_threads());
+  aIndexed->UpdateThreadLocal((size_t) omp_get_max_threads());
 
   // do the parallel insert
   #pragma omp parallel
   {
 
     // register the thread
-    a_indexed->AssignGCID(omp_get_thread_num());
+    aIndexed->AssignGCID(omp_get_thread_num());
 
     #pragma omp for
     for(int i = 0; i < aIndices.rowIDs.size(); ++i)
     {
       // store the thing into the btree
-      a_indexed->Insert(aIndices.colIDs[i], i);
+      aIndexed->Insert(aIndices.colIDs[i], i);
     }
 
     // unregister the thread
-    a_indexed->UnregisterThread(omp_get_thread_num());
+    aIndexed->UnregisterThread(omp_get_thread_num());
   }
 
   // aggregator map
   std::map<std::pair<size_t, size_t>, int> aggregator;
+
+  // create a btree
+  auto bReverseIndexed = new matrixReverseIndexBTree{true};
+
+  // set the number of threads
+  bReverseIndexed->UpdateThreadLocal((size_t) omp_get_max_threads());
+
+  // grab my node id
+  auto myNodeID = communicator->getNodeID();
+
+  // calculate the node offset
+  size_t bNodeOffset = 0;
+  for(auto i = 0; i < myNodeID; ++i) {
+    bNodeOffset += bIndices.nodeCounts[i];
+  }
 
   // execute the probing and aggregating
   #pragma omp parallel
   {
 
     // register the thread
-    a_indexed->AssignGCID(omp_get_thread_num());
+    aIndexed->AssignGCID(omp_get_thread_num());
+    bReverseIndexed->AssignGCID(omp_get_thread_num());
 
     // local aggregation map
     std::map<std::pair<size_t, size_t>, int> localAggregator;
 
     // go through the indices in be join and then aggregate
     #pragma omp for
-    for (int i = 0; i < bIndices.rowIDs.size(); ++i) {
+    for (size_t i = 0; i < bIndices.rowIDs.size(); ++i) {
 
       // grab the iterator
-      auto it = a_indexed->Begin(bIndices.rowIDs[i]);
+      auto it = aIndexed->Begin(bIndices.rowIDs[i]);
 
       // go through each match
       while(!it.IsEnd() && it->first == bIndices.rowIDs[i]) {
@@ -309,6 +395,13 @@ int main() {
 
         // we are joining two tuples
         auto key = std::make_pair(rowID, bIndices.colIDs[i]);
+
+        // is this on my node
+        if(bIndices.nodes[i] == myNodeID) {
+
+          // insert the reverse index
+          bReverseIndexed->Insert(bIndices.nodes[i], i - bNodeOffset);
+        }
 
         // if we don't have it set it to 0
         localAggregator.try_emplace(key, 0);
@@ -322,7 +415,8 @@ int main() {
     }
 
     // unregister the thread
-    a_indexed->UnregisterThread(omp_get_thread_num());
+    aIndexed->UnregisterThread(omp_get_thread_num());
+    bReverseIndexed->UnregisterThread(omp_get_thread_num());
 
     // the merging has to be executed sequentially
     #pragma omp critical
@@ -361,17 +455,28 @@ int main() {
 
   /// 4. Setup the pear to pear communication
 
-  // we are using two buffers one we are processing and one we are waiting
-  std::vector<std::shared_ptr<std::vector<double>>> buffers;
+  std::vector<std::thread*> threads;
 
-  // allocate the first buffer
-  auto tmp = std::make_shared<std::vector<double>>();
-  tmp->resize(chunkSize * chunkSize);
-  buffers.push_back(tmp);
+  // go through each node
+  for(int i = 0; i < communicator->getNumNodes(); ++i) {
 
-  // allocate the second buffer
-  tmp = std::make_shared<std::vector<double>>();
-  tmp->resize(chunkSize * chunkSize);
-  buffers.push_back(tmp);
+    // create the threads
+    auto *joinSenderStageThread = new std::thread(joinSenderStage, communicator, i, chunkSize, &bRowIDs, &bColIDs, &bValues, bReverseIndexed);
+    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, i, chunkSize);
+
+    // store it in the vector
+    threads.push_back(joinSenderStageThread);
+    threads.push_back(joinReceiveStageThread);
+  }
+
+  // go through each thread and wait for it to finish
+  for(auto &i : threads) {
+
+    // wait for it to finish
+    i->join();
+
+    // free the memory
+    delete(i);
+  }
 
 }

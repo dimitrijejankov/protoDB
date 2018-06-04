@@ -2,7 +2,8 @@
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_blas.h>
 
-size_t size = 10000;
+size_t rows = 100000;
+size_t cols = 1000;
 
 #include <stdio.h>
 #include <gsl/gsl_blas.h>
@@ -11,20 +12,20 @@ size_t size = 10000;
 
 int main (void)
 {
-  auto *a = (double*) malloc(size * size * sizeof(double));
-  auto *b = (double*) malloc(size * size * sizeof(double));
-  auto *c = (double*) malloc(size * size * sizeof(double));
+  auto *a = (double*) malloc(rows * cols * sizeof(double));
+  auto *b = (double*) malloc(rows * cols * sizeof(double));
+  auto *c = (double*) malloc(rows * rows * sizeof(double));
 
   int i, j = 0;
 
-  for (i = 0; i < size; i++)
-    for (j = 0; j < size; j++)
-      a[i * size + j] = 0.23 + i + j;
-      c[i * size + j] = 0.24 + i + j;
+  for (i = 0; i < rows; i++)
+    for (j = 0; j < cols; j++)
+      a[i * cols + j] = 0.23 + i + j;
+      b[i * cols + j] = 0.24 + i + j;
 
-  gsl_matrix_view A = gsl_matrix_view_array(a, size, size);
-  gsl_matrix_view B = gsl_matrix_view_array(b, size, size);
-  gsl_matrix_view C = gsl_matrix_view_array(c, size, size);
+  gsl_matrix_view A = gsl_matrix_view_array(a, rows, cols);
+  gsl_matrix_view B = gsl_matrix_view_array(b, cols, rows);
+  gsl_matrix_view C = gsl_matrix_view_array(c, rows, rows);
 
   auto start = std::clock();
 
