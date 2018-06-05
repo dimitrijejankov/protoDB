@@ -27,7 +27,7 @@ const int32_t AGG_COL_IDX_TAG = 6;
 const int32_t AGG_DOUBLE_TAG = 7;
 
 // dimensions of the matrices A and B
-size_t size = 10;
+size_t size = 4;
 size_t chunkSize = 2;
 
 
@@ -279,6 +279,8 @@ void joinSenderStage(CommunicatorPtr communicator,
     // grab the chunk index
     auto chunkIndex = it;
 
+    std::cout << "sending " << (*bRowIDs)[chunkIndex] << ", " << (*bColIDs)[chunkIndex] << " to " << node << std::endl;
+
     // send stuff
     communicator->send((*bRowIDs)[chunkIndex], node, ROW_IDX_TAG);
     communicator->send((*bColIDs)[chunkIndex], node, COL_IDX_TAG);
@@ -507,20 +509,21 @@ void aggregationSender(CommunicatorPtr communicator,
 void aggregationReceiver(CommunicatorPtr communicator,
                          int32_t node,
                          chunkQueue *freeProcessedQueue,
-                         chunkQueue *processedQueue) {
+                         chunkQueue *processedQueue,
+                         std::vector<std::atomic_int32_t> *counts) {
 
   // wait to grab a matrix from the queue
   MatrixChunk chunk{};
 
-  while (true) {
+  // how may messages we need to receive
+  int myCounts = (*counts)[node];
+
+  std::cout << "mycounts for node " << myCounts << " " << node << std::endl;
+
+  for(int i = 0; i < myCounts; ++i) {
 
     // grab the row id
     auto rowID = communicator->recv<size_t>(node, AGG_ROW_IDX_TAG);
-
-    // TODO this is silly but a temporary solution
-    if(rowID == std::numeric_limits<size_t>::max()) {
-      break;
-    }
 
     // grab the col id
     auto colID = communicator->recv<size_t>(node, AGG_COL_IDX_TAG);
@@ -648,6 +651,9 @@ int main() {
     bNodeOffset += bIndices.nodeCounts[i];
   }
 
+  // this tells us how many multiplied chunks we are going to have
+  std::vector<std::atomic_int32_t> sentMultiCounts((size_t) communicator->getNumNodes());
+
   // execute the probing and aggregating
   #pragma omp parallel
   {
@@ -687,6 +693,19 @@ int main() {
 
         // increment the thing
         localAggregator.find(key)->second =+ 1;
+
+        // figure out where the join is done
+        auto joinNode = bIndices.nodes[it->second];
+
+        // figure out where the aggregation is done
+        auto aggregationNode = (key.first + key.second) % communicator->getNumNodes();
+
+        // increment the damn counter
+        if(aggregationNode == myNodeID && joinNode != aggregationNode) {
+
+          std::cout << joinNode << ", " << aggregationNode << std::endl;
+          sentMultiCounts[joinNode]++;
+        }
 
         // go to the next one
         it++;
@@ -734,6 +753,7 @@ int main() {
       // allocate the right chunk size
       aggregateMatrix.find(it.first)->second.resize(chunkSize * chunkSize);
     }
+
   }
 
   /// 4. Setup the pear to pear communication
@@ -814,8 +834,6 @@ int main() {
     threads.push_back(aggregationProcessingThread);
   }
 
-  std::vector<std::thread*> receiverThreads;
-
   // go through each node
   for(int i = 0; i < communicator->getNumNodes(); ++i) {
 
@@ -823,30 +841,15 @@ int main() {
     auto *aggregationSenderThread = new std::thread(aggregationSender, communicator, &sendingQueue, &freeProcessedQueue, &unfinishedThreads);
 
     // init the receiver thread
-    auto *aggregationReceiverThread = new std::thread(aggregationReceiver, communicator, i, &freeProcessedQueue, &processedQueue);
+    auto *aggregationReceiverThread = new std::thread(aggregationReceiver, communicator, i, &freeProcessedQueue, &processedQueue, &sentMultiCounts);
 
     // store it in the vector
     threads.push_back(aggregationSenderThread);
-    receiverThreads.push_back(aggregationReceiverThread);
+    threads.push_back(aggregationReceiverThread);
   }
 
   // go through each thread and wait for it to finish
   for(auto &i : threads) {
-
-    // wait for it to finish
-    i->join();
-
-    // free the memory
-    delete(i);
-  }
-
-  // send terminate to each thread
-  for(int i = 0; i < communicator->getNumNodes(); ++i) {
-    communicator->send(std::numeric_limits<size_t>::max(), i, AGG_ROW_IDX_TAG);
-  }
-
-  // go through each thread and wait for it to finish
-  for(auto &i : receiverThreads) {
 
     // wait for it to finish
     i->join();
