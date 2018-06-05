@@ -9,37 +9,32 @@ size_t cols = 1000;
 #include <gsl/gsl_blas.h>
 #include <ctime>
 #include <iostream>
+#include <vector>
 
 int main (void)
 {
-  auto *a = (double*) malloc(rows * cols * sizeof(double));
-  auto *b = (double*) malloc(rows * cols * sizeof(double));
-  auto *c = (double*) malloc(rows * rows * sizeof(double));
 
-  int i, j = 0;
+  std::vector<double*> blocks;
 
-  for (i = 0; i < rows; i++)
-    for (j = 0; j < cols; j++)
-      a[i * cols + j] = 0.23 + i + j;
-      b[i * cols + j] = 0.24 + i + j;
+  for(int i = 0; i < 8; i++){
+    blocks.push_back(new double[10000 * 10000]);
+  }
 
-  gsl_matrix_view A = gsl_matrix_view_array(a, rows, cols);
-  gsl_matrix_view B = gsl_matrix_view_array(b, cols, rows);
-  gsl_matrix_view C = gsl_matrix_view_array(c, rows, rows);
+  for(int i = 0; i < 8; i++){
+    for(auto j = 0; j < 10000 * 10000; ++j){
+      blocks[i][j] = i + j;
+    }
+  }
 
-  auto start = std::clock();
+  double x = 0;
 
-  /* Compute C = A B */
-  gsl_blas_dgemm (CblasNoTrans, CblasNoTrans, 1.0, &A.matrix, &B.matrix, 0.0, &C.matrix);
+  for(int i = 0; i < 8; i++){
+    for(auto j = 0; j < 10000 * 10000; ++j){
+      x += blocks[i][j];
+    }
+  }
 
-  std::cout << "Time: " << (std::clock() - start) / (double)(CLOCKS_PER_SEC / 1000) << " ms" << std::endl;
-
-  printf ("[ %g, %g\n", c[0], c[1]);
-  printf ("  %g, %g ]\n", c[2], c[3]);
-
-  free(a);
-  free(b);
-  free(c);
+  std::cout << x << std::endl;
 
   return 0;
 }

@@ -49,6 +49,7 @@ include_directories(${PROJECT_SOURCE_DIR}/functionalities/resource_manager/inclu
 include_directories(${PROJECT_SOURCE_DIR}/runtime/include)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/lockfree)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/bwtree/include)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/queue)
 include_directories(${PROJECT_SOURCE_DIR}/core/include)
 
 # add the third party libraries

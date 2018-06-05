@@ -11,6 +11,12 @@
 #include <omp.h>
 #include <boost/functional/hash/hash.hpp>
 #include <mutex>
+#include <condition_variable>
+#include <gsl/gsl_matrix.h>
+#include <gsl/gsl_cblas.h>
+#include <gsl/gsl_blas.h>
+#include "blockingconcurrentqueue.h"
+
 
 const int32_t ROW_IDX_TAG = 1;
 const int32_t COL_IDX_TAG = 2;
@@ -18,11 +24,9 @@ const int32_t DOUBLE_TAG = 3;
 const int32_t COUNTS_TAG = 4;
 
 // dimensions of the matrices A and B
-size_t size = 4;
+size_t size = 10;
 size_t chunkSize = 2;
 
-typedef protoDB::bwtree::BwTree<size_t, int> matrixIndexBTree;
-typedef protoDB::bwtree::BwTree<int, size_t> matrixReverseIndexBTree;
 
 struct BroadcastedIndices {
 
@@ -58,6 +62,30 @@ struct BroadcastedIndices {
    */
   std::vector<size_t> rowIDs;
 };
+
+struct MatrixChunk {
+
+  /**
+   * This is where the data is stored
+   */
+  std::vector<double> *block;
+
+  /**
+   * the col id of the block
+   */
+  size_t colID;
+
+  /**
+   * the row id of the block
+   */
+  size_t rowID;
+
+};
+
+// define the containers
+typedef protoDB::bwtree::BwTree<size_t, int> matrixIndexBTree;
+typedef protoDB::bwtree::BwTree<int, size_t> matrixReverseIndexBTree;
+typedef concurent::BlockingConcurrentQueue<MatrixChunk> chunkQueue;
 
 void receiveRandomShuffled(CommunicatorPtr &communicator,
                            std::vector<size_t> &rowIDs,
@@ -106,7 +134,7 @@ void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chu
   /// 1. Generate a random permutation for each node and store the counts
 
   // allocate the memory for the permutation
-  std::vector<int32_t> permutation(chunkSize * chunkSize);
+  std::vector<int32_t> permutation(chunksPerDimension * chunksPerDimension);
 
   // allocate the memory for the counts
   std::vector<size_t> counts(numNodes);
@@ -252,23 +280,101 @@ void joinSenderStage(CommunicatorPtr communicator,
 }
 
 void joinReceiverStage(CommunicatorPtr communicator,
+                       chunkQueue *freeList,
+                       chunkQueue *processingList,
                        int32_t node,
-                       size_t chunkSize) {
+                       std::atomic_int32_t *unfinishedNodes) {
 
-  // get squared chunk size
-  auto chunkSquared = chunkSize * chunkSize;
-  std::vector<double> tmp(chunkSquared);
-
+  // grab the counts
   auto counts = communicator->recv<size_t>(node, COUNTS_TAG);
 
   for(size_t i = 0; i < counts; ++i) {
 
-    auto rowID = communicator->recv<size_t>(node, ROW_IDX_TAG);
-    auto colID = communicator->recv<size_t>(node, COL_IDX_TAG);
+    // grab a free chunk
+    MatrixChunk chunk{};
+    freeList->wait_dequeue(chunk);
 
-    communicator->recv(tmp, node, DOUBLE_TAG);
+    // initialize the indices
+    chunk.rowID = communicator->recv<size_t>(node, ROW_IDX_TAG);
+    chunk.colID = communicator->recv<size_t>(node, COL_IDX_TAG);
+
+    // grab the chunk
+    communicator->recv(*chunk.block, node, DOUBLE_TAG);
+
+    // add the chunk to the processing list
+    processingList->enqueue(chunk);
   }
 
+  // we finished with this node this
+  (*unfinishedNodes)--;
+}
+
+void joinProcessingStage(int32_t myNode,
+                         int32_t threadID,
+                         chunkQueue *processingList,
+                         chunkQueue *freeList,
+                         std::vector<double> *aValues,
+                         matrixIndexBTree *aIndexed,
+                         int32_t aNodeOffset,
+                         BroadcastedIndices *aIndices,
+                         std::atomic_int32_t *unfinishedNodes) {
+
+  // register node
+  aIndexed->AssignGCID(threadID);
+
+  // wait to grab a matrix from the queue
+  MatrixChunk chunk{};
+
+  std::vector<double> tmp(chunkSize * chunkSize);
+
+  // do this while you can
+  while(true) {
+
+    // try to grab something with a timeout of 10 us
+    auto success = processingList->wait_dequeue_timed(chunk, 10);
+
+    // should we end this
+    if (!success && (*unfinishedNodes) == 0) {
+      break;
+    }
+
+    // if we have a chunk
+    if(success) {
+
+      // grab the iterator
+      auto it = aIndexed->Begin(chunk.rowID);
+
+      // go through each match
+      while (!it.IsEnd() && it->first == chunk.rowID) {
+
+        // is this on our node
+        if(aIndices->nodes[it->second] == myNode) {
+
+          // wrap the B chunk in a gsl vector
+          gsl_matrix_view b = gsl_matrix_view_array(chunk.block->data(), chunkSize, chunkSize);
+
+          // wrap the A chunk in a gsl vector
+          auto blockOffset = (it->second - aNodeOffset) * chunkSize * chunkSize;
+          gsl_matrix_view a = gsl_matrix_view_array(&(*aValues).data()[blockOffset], chunkSize, chunkSize);
+
+          // wrap the c block in a gsl vector
+          gsl_matrix_view c = gsl_matrix_view_array(tmp.data(), chunkSize, chunkSize);
+
+          // do that multiply
+          gsl_blas_dgemm(CblasNoTrans, CblasNoTrans, 1.0, &a.matrix, &b.matrix, 0.0, &c.matrix);
+
+        }
+
+        it++;
+      }
+
+      // return it
+      freeList->enqueue(chunk);
+    }
+  }
+
+  // unregister this thread
+  aIndexed->UnregisterThread(threadID);
 }
 
 /**
@@ -318,11 +424,11 @@ int main() {
   /// 1. Broadcast all the indices to every node
 
   // initialize the indices for A
-  BroadcastedIndices aIndices((size_t) communicator->getNumNodes(), size);
+  BroadcastedIndices aIndices((size_t) communicator->getNumNodes(), chunksPerDimension * chunksPerDimension);
   broadcastAllIndices(communicator, aRowIDs, aColIDs, aIndices);
 
   // initialize the indices for b
-  BroadcastedIndices bIndices((size_t) communicator->getNumNodes(), size);
+  BroadcastedIndices bIndices((size_t) communicator->getNumNodes(), chunksPerDimension * chunksPerDimension);
   broadcastAllIndices(communicator, bRowIDs, bColIDs, bIndices);
 
   /// 2. Join and Aggregate to get the indices of the final result
@@ -363,7 +469,13 @@ int main() {
   // grab my node id
   auto myNodeID = communicator->getNodeID();
 
-  // calculate the node offset
+  // calculate the A matrix node offset
+  size_t aNodeOffset = 0;
+  for(auto i = 0; i < myNodeID; ++i) {
+    aNodeOffset += aIndices.nodeCounts[i];
+  }
+
+  // calculate the B matrix node offset
   size_t bNodeOffset = 0;
   for(auto i = 0; i < myNodeID; ++i) {
     bNodeOffset += bIndices.nodeCounts[i];
@@ -457,16 +569,56 @@ int main() {
 
   std::vector<std::thread*> threads;
 
+  // this are all the free blocks
+  chunkQueue freeQueue;
+
+  // this is the processing list of the blocks
+  chunkQueue processingQueue;
+
+  // this is where we get the memory for the processed join
+  chunkQueue freeProcessedQueue;
+
+  // the join processed block are put here
+  chunkQueue processedQueue;
+
+  // how many nodes are not done executing
+  std::atomic_int32_t unfinishedNodes = communicator->getNumNodes();
+
+  for(int i = 0; i < 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()); ++i) {
+
+    // create a chunk
+    MatrixChunk chunk{};
+    chunk.block = new std::vector<double> (chunkSize * chunkSize);
+
+    // create another
+    MatrixChunk chunkProcessed{};
+    chunkProcessed.block = new std::vector<double> (chunkSize * chunkSize);
+
+    // insert the thing into the queue
+    freeQueue.enqueue(chunk);
+    freeProcessedQueue.enqueue(chunkProcessed);
+  }
+
   // go through each node
   for(int i = 0; i < communicator->getNumNodes(); ++i) {
 
     // create the threads
     auto *joinSenderStageThread = new std::thread(joinSenderStage, communicator, i, chunkSize, &bRowIDs, &bColIDs, &bValues, bReverseIndexed);
-    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, i, chunkSize);
+    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, &freeQueue, &processingQueue, i, &unfinishedNodes);
 
     // store it in the vector
     threads.push_back(joinSenderStageThread);
     threads.push_back(joinReceiveStageThread);
+  }
+
+  // for each core create a matrix processing thread
+  for(int i = 0; i < communicator->getNumNodes(); ++i) {
+
+    // init the thread
+    auto *joinProcessingThread = new std::thread(joinProcessingStage, myNodeID, i, &processingQueue, &freeQueue, &aValues, aIndexed, aNodeOffset, &aIndices, &unfinishedNodes);
+
+    // store it in the vector
+    threads.push_back(joinProcessingThread);
   }
 
   // go through each thread and wait for it to finish
