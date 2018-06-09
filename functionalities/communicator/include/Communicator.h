@@ -5,6 +5,7 @@
 #include <mpi.h>
 #include <cassert>
 #include <iostream>
+#include <map>
 #include "AbstractFunctionality.h"
 
 class Communicator;
@@ -119,6 +120,35 @@ class Communicator : public AbstractFunctionality {
   }
 
   /**
+   * Receives the data send with the @see send method
+   * @param values - the array where we are storing the values, the allocated size must match
+   * the size of the received message
+   * @param source - the node which is sending the data
+   * @param tag - the tag of the message
+   */
+  template<typename T>
+  void recv(T *values, int32_t source, int32_t tag) {
+
+    // just an empty status and message structure
+    MPI_Status status{};
+    MPI_Message msg{};
+
+    // get the type of the data
+    MPI_Datatype type = this->getDataType<T>();
+
+    // probe the message
+    MPI_Mprobe(source, tag, MPI_COMM_WORLD, &msg, &status);
+
+    // grab the count
+    int32_t number_amount;
+    MPI_Get_count(&status, type, &number_amount);
+
+    // grab how many we got
+    MPI_Mrecv(values, number_amount, type, &msg, MPI_STATUS_IGNORE);
+  }
+
+
+  /**
    * Receives a single value that is sent with the @see send method
    * @param values - the vector where we are storing the values
    * @param source - the node which is sending the data
@@ -187,12 +217,40 @@ class Communicator : public AbstractFunctionality {
 
  private:
 
+  std::map<std::string, MPI_Datatype> registeredTypes;
+
+  /**
+   * Returns the mpi type associated with this type
+   * @tparam T
+   */
+  template<typename T, typename std::enable_if<!std::is_integral<T>::value>::type* = nullptr>
+  MPI_Datatype getDataType() {
+
+    // get the name of the type
+    std::string typeName(typeid(T).name());
+
+    // do we have already a type registered
+    if(registeredTypes.find(typeName) != registeredTypes.end()) {
+      return registeredTypes[typeName];
+    }
+
+    // we do not have it registered
+    MPI_Datatype type = T::getStructure();
+    MPI_Type_commit(&type);
+
+    // store it in the registered type
+    registeredTypes[typeName] = type;
+
+    // return the type
+    return type;
+  }
+
   /**
    * Returns the MPI data type
-   * @tparam T - the cpp type we want to get the mpi type
+   * @tparam T - the integral type we want to get the mpi type for
    * @return returns the type of the mpi data type
    */
-  template<typename T>
+  template<typename T, typename std::enable_if<std::is_integral<T>::value>::type* = nullptr>
   MPI_Datatype getDataType(){
 
     // if the type is integer
