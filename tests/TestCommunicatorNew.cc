@@ -19,8 +19,8 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 1000;
-size_t chunkSize = 200;
+size_t size = 10000;
+size_t chunkSize = 2000;
 
 struct BroadcastedIndices {
 
@@ -82,8 +82,8 @@ struct MatrixChunk {
   inline MatrixChunk* getChunkAt(size_t n) {
 
     // grab the chunk
-    size_t chunkSize = size * size * sizeof(double) + sizeof(MatrixChunk);
-    return (MatrixChunk*)((std::int8_t*)this + chunkSize * n);
+    size_t chunkSizeSquared = chunkSize * chunkSize * sizeof(double) + sizeof(MatrixChunk);
+    return (MatrixChunk*)((std::int8_t*)this + chunkSizeSquared * n);
   }
 
   /**
@@ -93,7 +93,7 @@ struct MatrixChunk {
    * @return - the allocated matrix
    */
   static MatrixChunk* allocateMemory(std::size_t n) {
-    return (MatrixChunk*) calloc(n, sizeof(MatrixChunk) + (size * size * sizeof(double)));
+    return (MatrixChunk*) calloc(n, sizeof(MatrixChunk) + (chunkSize * chunkSize * sizeof(double)));
   }
 
   /**
@@ -104,7 +104,7 @@ struct MatrixChunk {
 
     // create a new continuous chunk of memory
     MPI_Datatype newType;
-    MPI_Type_contiguous(sizeof(size_t) * 2 + size * size * sizeof(double), MPI_BYTE, &newType);
+    MPI_Type_contiguous(sizeof(size_t) * 2 + chunkSize * chunkSize * sizeof(double), MPI_BYTE, &newType);
 
     return newType;
   }
@@ -222,7 +222,8 @@ void receiveRandomShuffled(CommunicatorPtr &communicator,
   colIDs.reserve(num);
 
   // allocate the memory for the chunks
-  (*matrixChunks) = MatrixChunk::allocateMemory(num);
+  auto x = MatrixChunk::allocateMemory(num);
+  (*matrixChunks) = x;
 
   // receive each value
   for(size_t i = 0; i < num; ++i) {
@@ -500,7 +501,7 @@ void joinSenderStage(CommunicatorPtr communicator,
 }
 
 void joinReceiverStage(CommunicatorPtr communicator,
-                       chunkQueue *freeQueue,
+                       chunkQueue *freeMultiplyQueue,
                        chunkQueue *multiplyQueue,
                        int32_t node,
                        std::atomic_int32_t *unfinishedNodes) {
@@ -512,7 +513,7 @@ void joinReceiverStage(CommunicatorPtr communicator,
 
     // grab a free chunk
     MatrixChunk *chunk;
-    freeQueue->wait_dequeue(chunk);
+    freeMultiplyQueue->wait_dequeue(chunk);
 
     // grab the chunk
     communicator->recv(chunk, node, CHUNK_TAG);
@@ -535,11 +536,10 @@ void multiplyStage(int32_t myNode,
                    matrixIndexBTree *aIndexed,
                    int32_t aNodeOffset,
                    BroadcastedIndices *aIndices,
-                   std::atomic_int32_t *unfinishedNodes,
-                   std::atomic_int32_t *unfinishedThreads,
-                   chunkQueue *freeProcessedQueue,
-                   chunkQueue *processedQueue,
-                   AbstractLoggerPtr logger) {
+                   std::atomic_int32_t *unfinishedJoinReceiverNodes,
+                   std::atomic_int32_t *unfinishedMultiplyThreads,
+                   chunkQueue *freeMultipliedQueue,
+                   chunkQueue *multipliedQueue) {
 
   // register node
   aIndexed->AssignGCID(threadID);
@@ -559,7 +559,7 @@ void multiplyStage(int32_t myNode,
     auto success = multiplyQueue->wait_dequeue_timed(chunk, 10);
 
     // should we end this
-    if (!success && (*unfinishedNodes) == 0) {
+    if (!success && (*unfinishedJoinReceiverNodes) == 0) {
       break;
     }
 
@@ -583,7 +583,7 @@ void multiplyStage(int32_t myNode,
           gsl_matrix_view a = gsl_matrix_view_array(aValues->getChunkAt(blockOffset)->getData(), chunkSize, chunkSize);
 
           // grab a free processing chunk
-          freeProcessedQueue->wait_dequeue(processingChunk);
+          freeMultipliedQueue->wait_dequeue(processingChunk);
 
           // set the indices
           processingChunk->colID = chunk->colID;
@@ -596,7 +596,7 @@ void multiplyStage(int32_t myNode,
           gsl_blas_dgemm(CblasNoTrans, CblasNoTrans, 1.0, &a.matrix, &b.matrix, 0.0, &c.matrix);
 
           // forward the result to the aggregation thread
-          processedQueue->enqueue(processingChunk);
+          multipliedQueue->enqueue(processingChunk);
         }
 
         it++;
@@ -613,24 +613,55 @@ void multiplyStage(int32_t myNode,
   std::cout << "Ended joinProcessingStage"<< std::endl;
 
   // we finished the threads
-  (*unfinishedThreads)--;
+  (*unfinishedMultiplyThreads)--;
 }
 
-void aggregationProcessingStage(int32_t numNodes,
-                                std::map<std::pair<size_t, size_t>, std::vector<double>> *aggregatedMatrix,
+bool processAggregation(std::map<std::pair<size_t, size_t>, std::vector<double>> *aggregatedMatrix,
+                        std::map<std::pair<size_t, size_t>, std::mutex*> *aggregateLocks,
+                        MatrixChunk* aggregationChunk) {
+
+  // grab the key
+  auto key = std::make_pair(aggregationChunk->rowID, aggregationChunk->colID);
+
+  // is it on this node
+  if (aggregateLocks->find(key) != aggregateLocks->end()) {
+
+    // grab the lock
+    aggregateLocks->find(key)->second->lock();
+
+    // grab the aggregation chunk
+    auto agg = aggregatedMatrix->find(key)->second.data();
+
+    // chunk data
+    auto chunkData = aggregationChunk->getData();
+
+    for (int i = 0; i < chunkSize; ++i) {
+      for (int j = 0; j < chunkSize; ++j) {
+        agg[i * chunkSize + j] += chunkData[i * chunkSize + j];
+      }
+    }
+
+    // unlock the chunk
+    aggregateLocks->find(key)->second->unlock();
+
+    // we aggregated this chunk
+    return true;
+  }
+
+  // this chunk is not aggregated it needs to be send to another node
+  return false;
+}
+
+void aggregationProcessingStage(std::map<std::pair<size_t, size_t>, std::vector<double>> *aggregatedMatrix,
                                 std::map<std::pair<size_t, size_t>, std::mutex*> *aggregateLocks,
                                 chunkQueue *freeProcessedQueue,
                                 chunkQueue *processedQueue,
-                                sendingChunkQueue *sendingQueue,
-                                sendingChunkQueue *freeSendingQueue,
-                                std::atomic_int32_t *unfinishedMultiplyThreads,
-                                std::atomic_int32_t *unfinishedReceiverThreads,
-                                AbstractLoggerPtr logger) {
+                                chunkQueue *sendingQueue,
+                                chunkQueue *freeSendingQueue,
+                                std::atomic_int32_t *unfinishedMultiplyThreads) {
 
   // wait to grab a matrix from the queue
   MatrixChunk* aggregationChunk;
-
-  size_t x = 0;
 
   // do this while you can
   while(true) {
@@ -639,78 +670,83 @@ void aggregationProcessingStage(int32_t numNodes,
     auto success = processedQueue->wait_dequeue_timed(aggregationChunk, 10);
 
     // should we end this
-    if (!success && (*unfinishedMultiplyThreads) == 0 && (*unfinishedReceiverThreads) == 0) {
+    if (!success && (*unfinishedMultiplyThreads) == 0) {
       break;
     }
 
     // if we have a chunk
     if(success) {
 
-      // grab the key
-      auto key = std::make_pair(aggregationChunk->rowID, aggregationChunk->colID);
+      // process the aggregation
+      if(processAggregation(aggregatedMatrix, aggregateLocks, aggregationChunk)) {
 
-      // is it on this node
-      if(aggregateLocks->find(key) != aggregateLocks->end()) {
-
-        // grab the lock
-        aggregateLocks->find(key)->second->lock();
-
-        // grab the aggregation chunk
-        auto agg = aggregatedMatrix->find(key)->second.data();
-
-        // chunk data
-        auto chunkData = aggregationChunk->getData();
-
-        for(int i = 0; i < chunkSize; ++i) {
-          for(int j = 0; j < chunkSize; ++j) {
-            agg[i * chunkSize + j] += chunkData[i * chunkSize + j];
-          }
-        }
-
-        // unlock the chunk
-        aggregateLocks->find(key)->second->unlock();
-
-        // add the chunk back to the free
+        // add the chunk back to the free queue
         freeProcessedQueue->enqueue(aggregationChunk);
 
       } else {
 
-        // wait to grab a matrix from the queue
-        SendingChunk *sendingChunk;
-
         // grab a free chunk from the
+        MatrixChunk *sendingChunk;
         freeSendingQueue->wait_dequeue(sendingChunk);
 
-        // ok we need to slam this guy to a node figure out which node
-        sendingChunk->node = (int32_t) ((key.first + key.second) % numNodes);
-
-        // set the chunk
-        auto tmp = sendingChunk->chunk;
-        sendingChunk->chunk = aggregationChunk;
-        aggregationChunk = tmp;
-
         // forward this chunk to the sender
-        sendingQueue->enqueue(sendingChunk);
+        sendingQueue->enqueue(aggregationChunk);
 
-        // add the chunk back to the free
-        freeProcessedQueue->enqueue(aggregationChunk);
-
-        x++;
+        // add one chunk back to the sending queue
+        freeProcessedQueue->enqueue(sendingChunk);
       }
     }
   }
 
-  logger->info() << "Ended aggregationProcessingStage " << x << logger->endl;
+  std::cout << "Ended aggregationProcessingStage " << std::endl;
+}
+
+void recievedAggregationProcessingStage(std::map<std::pair<size_t, size_t>, std::vector<double>> *aggregatedMatrix,
+                                        std::map<std::pair<size_t, size_t>, std::mutex*> *aggregateLocks,
+                                        chunkQueue *freeReceivedQueue,
+                                        chunkQueue *receivedQueue,
+                                        std::atomic_int32_t *unfinishedReceivedThreads) {
+
+  // wait to grab a matrix from the queue
+  MatrixChunk* aggregationChunk;
+
+  // do this while you can
+  while(true) {
+
+    // try to grab something with a timeout of 10 us
+    auto success = receivedQueue->wait_dequeue_timed(aggregationChunk, 10);
+
+    // should we end this
+    if (!success && (*unfinishedReceivedThreads) == 0) {
+      break;
+    }
+
+    // if we have a chunk
+    if(success) {
+
+      // process the aggregation
+      if(processAggregation(aggregatedMatrix, aggregateLocks, aggregationChunk)) {
+
+        // add the chunk back to the free queue
+        freeReceivedQueue->enqueue(aggregationChunk);
+      }
+      else {
+        std::cout << "This is bad" << std::endl;
+      }
+
+    }
+  }
+
+  std::cout << "Ended aggregationProcessingStage" << std::endl;
 }
 
 void aggregationSender(CommunicatorPtr communicator,
-                       sendingChunkQueue *sendingQueue,
-                       sendingChunkQueue *freeSendingQueue,
-                       chunkQueue *freeProcessing,
+                       chunkQueue *sendingQueue,
+                       chunkQueue *freeSendingQueue,
                        std::atomic_int32_t *unfinishedMultiplyThreads) {
 
   // wait to grab a matrix from the queue
-  SendingChunk *aggregationChunk;
+  MatrixChunk *aggregationChunk;
 
   // do this while you can
   while(true) {
@@ -726,8 +762,10 @@ void aggregationSender(CommunicatorPtr communicator,
     // if we have a chunk
     if(success) {
 
+      auto node = (int32_t) ((aggregationChunk->rowID + aggregationChunk->colID) % communicator->getNumNodes());
+
       // send stuff
-      communicator->send(aggregationChunk->chunk, 1, aggregationChunk->node, AGG_CHUNK_TAG);
+      communicator->send(aggregationChunk, 1, node, AGG_CHUNK_TAG);
 
       // return the sending chunk
       freeSendingQueue->enqueue(aggregationChunk);
@@ -739,9 +777,9 @@ void aggregationSender(CommunicatorPtr communicator,
 
 void aggregationReceiver(CommunicatorPtr communicator,
                          int32_t node,
-                         chunkQueue *freeProcessedQueue,
-                         chunkQueue *processedQueue,
                          std::vector<std::atomic_int32_t> *counts,
+                         chunkQueue *freeReceivedQueue,
+                         chunkQueue *receivedQueue,
                          std::atomic_int32_t *unfinishedReceiverThreads) {
 
   // wait to grab a matrix from the queue
@@ -752,16 +790,16 @@ void aggregationReceiver(CommunicatorPtr communicator,
 
   for(int i = 0; i < myCounts; ++i) {
 
-    // grab a free processing chunk
-    freeProcessedQueue->wait_dequeue(chunk);
-    std::cout << "Free queue " << freeProcessedQueue->size_approx() << std::endl;
+    // grab a free chunk
+    freeReceivedQueue->wait_dequeue(chunk);
 
-    // grab the chunk
+    // receive
     communicator->recv(chunk, node, AGG_CHUNK_TAG);
 
-    // send the chunk to processing
-    processedQueue->enqueue(chunk);
-    std::cout << processedQueue->size_approx() << std::endl;
+    // forward this to the
+    receivedQueue->enqueue(chunk);
+
+    std::cout << chunk->colID << ", " << chunk->rowID << std::endl;
   }
 
   std::cout << "Ended aggregationReceiver" << myCounts << std::endl;
@@ -891,76 +929,75 @@ int main() {
 
   std::vector<std::thread*> threads;
 
-  // this are all the free blocks
-  auto *freeQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
-
-  // this is the processing list of the blocks
+  // these two queues are used together one has the chunks that need to be multiplied and the other the free chunks
+  auto *freeMultiplyQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
   auto *multiplyQueue = new chunkQueue();
 
-  // this is where we get the memory for the processed join
-  auto *freeProcessedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  // these two queues are used together one has the chunks that need to be multiplied and the other the free chunks
+  auto *freeMultipliedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto *multipliedQueue = new chunkQueue();
 
-  // the join processed block are put here
-  auto *processedQueue = new chunkQueue();
+  // these two queues are used together one is used to forward chunks to the sending thread
+  auto *freeSendingQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto *sendingQueue = new chunkQueue();
 
-  // this is where we put the sending chunks we want to send
-  auto *freeSendingQueue = allocateFreeSendingQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
-
-  // this is where we put the aggregation chunks we want to send
-  auto *sendingQueue = new sendingChunkQueue();
+  // these two queues are used together one is used to forward chunks to the sending thread
+  auto *freeReceivedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto *receivedQueue = new chunkQueue();
 
   // how many nodes are not done executing
-  std::atomic_int32_t unfinishedNodes = communicator->getNumNodes();
+  std::atomic_int32_t unfinishedJoinReceivers = communicator->getNumNodes();
+  std::atomic_int32_t unfinishedMultiplyThreads = resourceManager->getNumCores();
+  std::atomic_int32_t unfinishedReceiverThreads = communicator->getNumNodes();
 
-  // go through each node
+  // this part is taking in
   for(int i = 0; i < communicator->getNumNodes(); ++i) {
 
     // create the threads
     auto *joinSenderStageThread = new std::thread(joinSenderStage, communicator, i, bValues, bReverseIndexed);
-    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, freeQueue, multiplyQueue, i, &unfinishedNodes);
+    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, freeMultiplyQueue, multiplyQueue, i, &unfinishedJoinReceivers);
 
     // store it in the vector
     threads.push_back(joinSenderStageThread);
     threads.push_back(joinReceiveStageThread);
   }
 
-  // how many threads are not done executing
-  std::atomic_int32_t unfinishedMultiplyThreads = resourceManager->getNumCores();
-  std::atomic_int32_t unfinishedReceiverThreads = communicator->getNumNodes();
-
-  // for each core create a matrix processing thread
+  // for each core create a matrix processing thread this thread puts stuff in the multipliedQueue
   for(int i = 0; i < resourceManager->getNumCores(); ++i) {
 
-    // init the join thread
-    auto *multiplyProcessingThread = new std::thread(multiplyStage,
-                                                     myNodeID,
-                                                     i,
-                                                     multiplyQueue,
-                                                     freeQueue,
-                                                     aValues,
-                                                     aIndexed,
-                                                     aNodeOffset,
-                                                     &aIndices,
-                                                     &unfinishedNodes,
-                                                     &unfinishedMultiplyThreads,
-                                                     freeProcessedQueue,
-                                                     processedQueue,
-                                                     logger);
+    auto *joinMultiplyThread = new std::thread(multiplyStage,
+                                               myNodeID,
+                                               i,
+                                               multiplyQueue,
+                                               freeMultiplyQueue,
+                                               aValues,
+                                               aIndexed,
+                                               aNodeOffset,
+                                               &aIndices,
+                                               &unfinishedJoinReceivers,
+                                               &unfinishedMultiplyThreads,
+                                               freeMultipliedQueue,
+                                               multipliedQueue);
+
+    // store it in the vector
+    threads.push_back(joinMultiplyThread);
+  }
+
+  // for each core create an aggregation thread that is going to do a local aggregation or forward the chunk to a
+  // sending queue that is going to forward it to the right node
+  for(int i = 0; i < resourceManager->getNumCores(); ++i) {
+
 
     // init the aggregation thread
     auto *aggregationProcessingThread = new std::thread(aggregationProcessingStage,
-                                                        communicator->getNumNodes(),
                                                         &aggregateMatrix,
                                                         &aggregateLocks,
-                                                        freeProcessedQueue,
-                                                        processedQueue,
+                                                        freeMultipliedQueue,
+                                                        multipliedQueue,
                                                         sendingQueue,
                                                         freeSendingQueue,
-                                                        &unfinishedMultiplyThreads,
-                                                        &unfinishedReceiverThreads,
-                                                        logger);
+                                                        &unfinishedMultiplyThreads);
     // store it in the vector
-    threads.push_back(multiplyProcessingThread);
     threads.push_back(aggregationProcessingThread);
   }
 
@@ -968,14 +1005,39 @@ int main() {
   for(int i = 0; i < communicator->getNumNodes(); ++i) {
 
     // init the aggregation sender thread
-    auto *aggregationSenderThread = new std::thread(aggregationSender, communicator, sendingQueue, freeSendingQueue, freeProcessedQueue, &unfinishedMultiplyThreads);
+    auto *aggregationSenderThread = new std::thread(aggregationSender,
+                                                    communicator,
+                                                    sendingQueue,
+                                                    freeSendingQueue,
+                                                    &unfinishedMultiplyThreads);
 
     // init the receiver thread
-    auto *aggregationReceiverThread = new std::thread(aggregationReceiver, communicator, i, freeProcessedQueue, processedQueue, &sentMultiCounts, &unfinishedReceiverThreads);
+    auto *aggregationReceiverThread = new std::thread(aggregationReceiver,
+                                                      communicator,
+                                                      i,
+                                                      &sentMultiCounts,
+                                                      freeReceivedQueue,
+                                                      receivedQueue,
+                                                      &unfinishedReceiverThreads);
 
     // store it in the vector
     threads.push_back(aggregationSenderThread);
     threads.push_back(aggregationReceiverThread);
+  }
+
+  // for each core create an aggregation thread that is going to do a local aggregation on chunks received from other nodes
+  for(int i = 0; i < resourceManager->getNumCores(); ++i) {
+
+
+    // init the aggregation thread
+    auto *aggregationProcessingThread = new std::thread(recievedAggregationProcessingStage,
+                                                        &aggregateMatrix,
+                                                        &aggregateLocks,
+                                                        freeReceivedQueue,
+                                                        receivedQueue,
+                                                        &unfinishedReceiverThreads);
+    // store it in the vector
+    threads.push_back(aggregationProcessingThread);
   }
 
   // go through each thread and wait for it to finish
