@@ -11,7 +11,10 @@
 #include <blockingconcurrentqueue.h>
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_blas.h>
+#include <unistd.h>
 #include "bwtree.h"
+
+//#define DEBUG
 
 // tags
 const int32_t COUNTS_TAG = 1;
@@ -19,8 +22,8 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 10000;
-size_t chunkSize = 2000;
+size_t size = 100;
+size_t chunkSize = 20;
 
 struct BroadcastedIndices {
 
@@ -221,10 +224,6 @@ void receiveRandomShuffled(CommunicatorPtr &communicator,
   rowIDs.reserve(num);
   colIDs.reserve(num);
 
-  // allocate the memory for the chunks
-  auto x = MatrixChunk::allocateMemory(num);
-  (*matrixChunks) = x;
-
   // receive each value
   for(size_t i = 0; i < num; ++i) {
 
@@ -418,10 +417,10 @@ void preprocessJoinAndAggregation(int32_t myNodeID,
   }
 }
 
-chunkQueue *allocateFreeQueue(size_t n) {
+std::pair<chunkQueue*, MatrixChunk*> allocateFreeQueue(size_t n) {
 
   // the queue where we put the chunks
-  chunkQueue *queue = new chunkQueue();
+  auto *queue = new chunkQueue();
 
   // allocate the memory for the chunks
   auto chunks = MatrixChunk::allocateMemory(n);
@@ -438,33 +437,7 @@ chunkQueue *allocateFreeQueue(size_t n) {
   }
 
   // return the build free queue
-  return queue;
-}
-
-sendingChunkQueue *allocateFreeSendingQueue(size_t n) {
-
-  // the queue where we put the chunks
-  auto *queue = new sendingChunkQueue();
-
-  // allocate the memory for the chunks
-  auto sendingChunks = new SendingChunk[n];
-
-  // allocate the memory for the chunks
-  auto chunks = MatrixChunk::allocateMemory(n);
-
-  // build up the queue
-  #pragma omp parallel for
-  for(size_t i = 0; i < n; ++i) {
-
-    // set a chunk
-    sendingChunks[i].chunk = chunks->getChunkAt(i);
-
-    // add the chunk to the queue
-    queue->enqueue(&sendingChunks[i]);
-  }
-
-  // return the build free queue
-  return queue;
+  return std::make_pair(queue, chunks);
 }
 
 void joinSenderStage(CommunicatorPtr communicator,
@@ -725,15 +698,10 @@ void recievedAggregationProcessingStage(std::map<std::pair<size_t, size_t>, std:
     if(success) {
 
       // process the aggregation
-      if(processAggregation(aggregatedMatrix, aggregateLocks, aggregationChunk)) {
+      processAggregation(aggregatedMatrix, aggregateLocks, aggregationChunk);
 
-        // add the chunk back to the free queue
-        freeReceivedQueue->enqueue(aggregationChunk);
-      }
-      else {
-        std::cout << "This is bad" << std::endl;
-      }
-
+      // add the chunk back to the free queue
+      freeReceivedQueue->enqueue(aggregationChunk);
     }
   }
 
@@ -798,8 +766,6 @@ void aggregationReceiver(CommunicatorPtr communicator,
 
     // forward this to the
     receivedQueue->enqueue(chunk);
-
-    std::cout << chunk->colID << ", " << chunk->rowID << std::endl;
   }
 
   std::cout << "Ended aggregationReceiver" << myCounts << std::endl;
@@ -850,7 +816,7 @@ int main() {
 
   // the matrix b will will fit a sequence of 0,1,2,3,4,5 row-wise
   auto sequenceLambda = [](size_t i, size_t j) { return i * size + j; };
-  createMatrix(identityLambda, communicator, size, chunkSize, &bValues, bRowIDs, bColIDs);
+  createMatrix(sequenceLambda, communicator, size, chunkSize, &bValues, bRowIDs, bColIDs);
 
   /// 2. Broadcast all local copies of the indices to each node
 
@@ -930,20 +896,20 @@ int main() {
   std::vector<std::thread*> threads;
 
   // these two queues are used together one has the chunks that need to be multiplied and the other the free chunks
-  auto *freeMultiplyQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
-  auto *multiplyQueue = new chunkQueue();
+  auto freeMultiplyQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto multiplyQueue = new chunkQueue();
 
   // these two queues are used together one has the chunks that need to be multiplied and the other the free chunks
-  auto *freeMultipliedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
-  auto *multipliedQueue = new chunkQueue();
+  auto freeMultipliedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto multipliedQueue = new chunkQueue();
 
   // these two queues are used together one is used to forward chunks to the sending thread
-  auto *freeSendingQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
-  auto *sendingQueue = new chunkQueue();
+  auto freeSendingQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto sendingQueue = new chunkQueue();
 
   // these two queues are used together one is used to forward chunks to the sending thread
-  auto *freeReceivedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
-  auto *receivedQueue = new chunkQueue();
+  auto freeReceivedQueue = allocateFreeQueue((size_t) 2 * std::max(omp_get_max_threads(), communicator->getNumNodes()));
+  auto receivedQueue = new chunkQueue();
 
   // how many nodes are not done executing
   std::atomic_int32_t unfinishedJoinReceivers = communicator->getNumNodes();
@@ -955,7 +921,7 @@ int main() {
 
     // create the threads
     auto *joinSenderStageThread = new std::thread(joinSenderStage, communicator, i, bValues, bReverseIndexed);
-    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, freeMultiplyQueue, multiplyQueue, i, &unfinishedJoinReceivers);
+    auto *joinReceiveStageThread = new std::thread(joinReceiverStage, communicator, freeMultiplyQueue.first, multiplyQueue, i, &unfinishedJoinReceivers);
 
     // store it in the vector
     threads.push_back(joinSenderStageThread);
@@ -969,14 +935,14 @@ int main() {
                                                myNodeID,
                                                i,
                                                multiplyQueue,
-                                               freeMultiplyQueue,
+                                               freeMultiplyQueue.first,
                                                aValues,
                                                aIndexed,
                                                aNodeOffset,
                                                &aIndices,
                                                &unfinishedJoinReceivers,
                                                &unfinishedMultiplyThreads,
-                                               freeMultipliedQueue,
+                                               freeMultipliedQueue.first,
                                                multipliedQueue);
 
     // store it in the vector
@@ -992,10 +958,10 @@ int main() {
     auto *aggregationProcessingThread = new std::thread(aggregationProcessingStage,
                                                         &aggregateMatrix,
                                                         &aggregateLocks,
-                                                        freeMultipliedQueue,
+                                                        freeMultipliedQueue.first,
                                                         multipliedQueue,
                                                         sendingQueue,
-                                                        freeSendingQueue,
+                                                        freeSendingQueue.first,
                                                         &unfinishedMultiplyThreads);
     // store it in the vector
     threads.push_back(aggregationProcessingThread);
@@ -1008,7 +974,7 @@ int main() {
     auto *aggregationSenderThread = new std::thread(aggregationSender,
                                                     communicator,
                                                     sendingQueue,
-                                                    freeSendingQueue,
+                                                    freeSendingQueue.first,
                                                     &unfinishedMultiplyThreads);
 
     // init the receiver thread
@@ -1016,7 +982,7 @@ int main() {
                                                       communicator,
                                                       i,
                                                       &sentMultiCounts,
-                                                      freeReceivedQueue,
+                                                      freeReceivedQueue.first,
                                                       receivedQueue,
                                                       &unfinishedReceiverThreads);
 
@@ -1033,7 +999,7 @@ int main() {
     auto *aggregationProcessingThread = new std::thread(recievedAggregationProcessingStage,
                                                         &aggregateMatrix,
                                                         &aggregateLocks,
-                                                        freeReceivedQueue,
+                                                        freeReceivedQueue.first,
                                                         receivedQueue,
                                                         &unfinishedReceiverThreads);
     // store it in the vector
@@ -1049,5 +1015,52 @@ int main() {
     // free the memory
     delete(i);
   }
+
+  // delete the queues
+  delete freeMultiplyQueue.first;
+  delete multiplyQueue;
+  delete freeMultipliedQueue.first;
+  delete multipliedQueue;
+  delete freeSendingQueue.first;
+  delete sendingQueue;
+  delete freeReceivedQueue.first;
+  delete receivedQueue;
+
+  // free the queue memory
+  free(freeMultiplyQueue.second);
+  free(freeMultipliedQueue.second);
+  free(freeSendingQueue.second);
+  free(freeReceivedQueue.second);
+
+  // delete the locks
+  for(auto l : aggregateLocks) {
+    delete l.second;
+  }
+
+#ifdef DEBUG
+
+  sleep(communicator->getNumNodes());
+
+  for(auto &it : aggregateMatrix) {
+
+    std::cout << it.first.first << ", " << it.first.second << ":" << std::endl;
+
+    std::cout << "[";
+
+    for(int i = 0; i < chunkSize; ++i) {
+
+      std::cout << "[";
+
+      for(int j = 0; j <  chunkSize; ++j) {
+        std::cout << it.second[i * chunkSize + j] << " ";
+      }
+
+      std::cout << "]";
+    }
+
+    std::cout << "]" << std::endl;
+  }
+
+#endif
 
 }
