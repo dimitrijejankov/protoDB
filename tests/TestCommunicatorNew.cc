@@ -22,8 +22,8 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 100;
-size_t chunkSize = 20;
+size_t size = 1000;
+size_t chunkSize = 200;
 
 struct BroadcastedIndices {
 
@@ -223,6 +223,9 @@ void receiveRandomShuffled(CommunicatorPtr &communicator,
   // reserve the approximate amount of memory
   rowIDs.reserve(num);
   colIDs.reserve(num);
+
+  // allocate the chunks
+  (*matrixChunks) = MatrixChunk::allocateMemory(num);
 
   // receive each value
   for(size_t i = 0; i < num; ++i) {
@@ -1025,12 +1028,15 @@ int main() {
   delete sendingQueue;
   delete freeReceivedQueue.first;
   delete receivedQueue;
+  delete aIndexed;
 
   // free the queue memory
   free(freeMultiplyQueue.second);
   free(freeMultipliedQueue.second);
   free(freeSendingQueue.second);
   free(freeReceivedQueue.second);
+  free(aValues);
+  free(bValues);
 
   // delete the locks
   for(auto l : aggregateLocks) {
