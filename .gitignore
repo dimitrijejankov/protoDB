@@ -1,2 +1,9 @@
 cmake-build-debug
 .idea
+CMakeCache.txt
+CMakeFiles
+Makefile
+cmake_install.cmake
+libbwtree.a
+test-matrix-multiply
+
