@@ -8,7 +8,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
 if (COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native ")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -O3")
 endif()
 
 # find threads
@@ -83,6 +83,8 @@ endfunction(add_protodb_app)
 
 # add the main app
 add_protodb_app(protoDB main.cpp)
+
+add_protodb_app(test-matrix-multiply tests/TestMatrixMultiply.cc)
 
 # add the test data store test
 add_protodb_app(test-data-store tests/TestDataStore.cc)
