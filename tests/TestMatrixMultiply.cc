@@ -5,10 +5,13 @@
 #include <vector>
 #include <iostream>
 #include <boost/thread/barrier.hpp>
+#include <fstream>
 
 size_t size = 10;
 
 boost::barrier *bar;
+
+long globalTime = 0;
 
 void initMatrix(double *data) {
   for(int i = 0; i < size; ++i) {
@@ -65,7 +68,7 @@ void multiply() {
 
   // just print this out so it does not get optmized out
   std::cout << "Value " << tmp << std::endl;
-  std::cout << "totalTime " << totalTime / numMatrices << std::endl;
+  globalTime += totalTime / numMatrices;
 
   // free the matrices
   for(int i = 0; i < (numMatrices + 2); i++) {
@@ -101,6 +104,9 @@ int main(int argc, char *argv[]) {
     delete t;
   }
 
-  delete bar;
+  std::ofstream outfile("results_matrix_multiply.csv", std::ios_base::app);
+  outfile << size << ", " << threadNo << ", " << globalTime / threadNo << std::endl;
+  outfile.close();
 
+  delete bar;
 }
