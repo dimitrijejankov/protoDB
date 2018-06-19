@@ -22,8 +22,8 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 1000;
-size_t chunkSize = 200;
+size_t size = 25600;
+size_t chunkSize = 3200;
 
 struct BroadcastedIndices {
 
@@ -203,8 +203,14 @@ void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chu
       tmp->rowID = c_i;
       tmp->colID = c_j;
 
+      clock_t start = clock();
+
       // send the chunk
       communicator->send(tmp, 1, permutation[c_i * chunksPerDimension + c_j], CHUNK_TAG);
+
+      clock_t end = clock();
+      double elapsed_secs = double(end - start) / CLOCKS_PER_SEC;
+      std::cout << elapsed_secs << std::endl;
     }
   }
 
@@ -821,6 +827,9 @@ int main() {
   auto sequenceLambda = [](size_t i, size_t j) { return i * size + j; };
   createMatrix(sequenceLambda, communicator, size, chunkSize, &bValues, bRowIDs, bColIDs);
 
+  // start time
+  auto start = std::chrono::steady_clock::now();
+
   /// 2. Broadcast all local copies of the indices to each node
 
   // initialize the indices for A
@@ -1018,6 +1027,12 @@ int main() {
     // free the memory
     delete(i);
   }
+
+  // end time
+  auto end = std::chrono::steady_clock::now();
+
+  // add the total time
+  std::cout << "Finished : " << std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count() << std::endl;
 
   // delete the queues
   delete freeMultiplyQueue.first;
