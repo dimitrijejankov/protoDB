@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include "bwtree.h"
 
-//#define DEBUG
+//#define DEBUG_ME
 
 // tags
 const int32_t COUNTS_TAG = 1;
@@ -203,14 +203,14 @@ void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chu
       tmp->rowID = c_i;
       tmp->colID = c_j;
 
-      clock_t start = clock();
+      //clock_t start = clock();
 
       // send the chunk
       communicator->send(tmp, 1, permutation[c_i * chunksPerDimension + c_j], CHUNK_TAG);
 
-      clock_t end = clock();
-      double elapsed_secs = double(end - start) / CLOCKS_PER_SEC;
-      std::cout << elapsed_secs << std::endl;
+      //clock_t end = clock();
+      //double elapsed_secs = double(end - start) / CLOCKS_PER_SEC;
+      //std::cout << elapsed_secs << std::endl;
     }
   }
 
@@ -1058,7 +1058,7 @@ int main() {
     delete l.second;
   }
 
-#ifdef DEBUG
+#ifdef DEBUG_ME
 
   sleep(communicator->getNumNodes());
 
