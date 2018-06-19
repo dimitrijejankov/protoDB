@@ -6,6 +6,7 @@
 #include <cassert>
 #include <iostream>
 #include <map>
+#include <cstdlib>
 #include "AbstractFunctionality.h"
 
 class Communicator;

@@ -25,6 +25,8 @@ const int32_t AGG_CHUNK_TAG = 3;
 size_t size = 12800;
 size_t chunkSize = 1600;
 
+typedef std::atomic<int32_t> atomic_int32_t;
+
 struct BroadcastedIndices {
 
   BroadcastedIndices(size_t numberOfNodes, size_t numberOfIndices) {
@@ -113,25 +115,10 @@ struct MatrixChunk {
   }
 };
 
-struct SendingChunk {
-
-  /**
-   * The chunk we are sending
-   */
-  MatrixChunk* chunk;
-
-  /**
-   * The node we are sending it to
-   */
-  int32_t node;
-
-};
-
 // define the containers
 typedef protoDB::bwtree::BwTree<size_t, int> matrixIndexBTree;
 typedef protoDB::bwtree::BwTree<int, size_t> matrixReverseIndexBTree;
 typedef concurent::BlockingConcurrentQueue<MatrixChunk*> chunkQueue;
-typedef concurent::BlockingConcurrentQueue<SendingChunk*> sendingChunkQueue;
 
 void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chunkSize, CommunicatorPtr communicator) {
 
@@ -343,7 +330,7 @@ void preprocessJoinAndAggregation(int32_t myNodeID,
                                   size_t bNodeOffset,
                                   std::map<std::pair<size_t, size_t>, int> &aggregator,
                                   matrixReverseIndexBTree *bReverseIndexed,
-                                  std::vector<std::atomic_int32_t> &sentMultiCounts) {
+                                  std::vector<atomic_int32_t> &sentMultiCounts) {
 
   // set the number of threads
   bReverseIndexed->UpdateThreadLocal((size_t) omp_get_max_threads());
@@ -385,7 +372,9 @@ void preprocessJoinAndAggregation(int32_t myNodeID,
         }
 
         // if we don't have it set it to 0
-        localAggregator.try_emplace(key, 0);
+        if(localAggregator.find(key) == localAggregator.end()) {
+          localAggregator.emplace(key, 0);
+        }
 
         // increment the thing
         localAggregator.find(key)->second =+ 1;
@@ -417,7 +406,9 @@ void preprocessJoinAndAggregation(int32_t myNodeID,
       for(auto it : localAggregator) {
 
         // if we don't have it set it to 0
-        aggregator.try_emplace(it.first, 0);
+        if(aggregator.find(it.first) == aggregator.end()) {
+          aggregator.emplace(it.first, 0);
+        }
 
         // sum it up
         aggregator.find(it.first)->second += it.second;
@@ -486,7 +477,7 @@ void joinReceiverStage(CommunicatorPtr communicator,
                        chunkQueue *freeMultiplyQueue,
                        chunkQueue *multiplyQueue,
                        int32_t node,
-                       std::atomic_int32_t *unfinishedNodes) {
+                       atomic_int32_t *unfinishedNodes) {
 
   // grab the counts
   auto counts = communicator->recv<size_t>(node, COUNTS_TAG);
@@ -518,8 +509,8 @@ void multiplyStage(int32_t myNode,
                    matrixIndexBTree *aIndexed,
                    int32_t aNodeOffset,
                    BroadcastedIndices *aIndices,
-                   std::atomic_int32_t *unfinishedJoinReceiverNodes,
-                   std::atomic_int32_t *unfinishedMultiplyThreads,
+                   atomic_int32_t *unfinishedJoinReceiverNodes,
+                   atomic_int32_t *unfinishedMultiplyThreads,
                    chunkQueue *freeMultipliedQueue,
                    chunkQueue *multipliedQueue) {
 
@@ -640,7 +631,7 @@ void aggregationProcessingStage(std::map<std::pair<size_t, size_t>, std::vector<
                                 chunkQueue *processedQueue,
                                 chunkQueue *sendingQueue,
                                 chunkQueue *freeSendingQueue,
-                                std::atomic_int32_t *unfinishedMultiplyThreads) {
+                                atomic_int32_t *unfinishedMultiplyThreads) {
 
   // wait to grab a matrix from the queue
   MatrixChunk* aggregationChunk;
@@ -687,7 +678,7 @@ void recievedAggregationProcessingStage(std::map<std::pair<size_t, size_t>, std:
                                         std::map<std::pair<size_t, size_t>, std::mutex*> *aggregateLocks,
                                         chunkQueue *freeReceivedQueue,
                                         chunkQueue *receivedQueue,
-                                        std::atomic_int32_t *unfinishedReceivedThreads) {
+                                        atomic_int32_t *unfinishedReceivedThreads) {
 
   // wait to grab a matrix from the queue
   MatrixChunk* aggregationChunk;
@@ -720,7 +711,7 @@ void recievedAggregationProcessingStage(std::map<std::pair<size_t, size_t>, std:
 void aggregationSender(CommunicatorPtr communicator,
                        chunkQueue *sendingQueue,
                        chunkQueue *freeSendingQueue,
-                       std::atomic_int32_t *unfinishedMultiplyThreads) {
+                       atomic_int32_t *unfinishedMultiplyThreads) {
 
   // wait to grab a matrix from the queue
   MatrixChunk *aggregationChunk;
@@ -754,10 +745,10 @@ void aggregationSender(CommunicatorPtr communicator,
 
 void aggregationReceiver(CommunicatorPtr communicator,
                          int32_t node,
-                         std::vector<std::atomic_int32_t> *counts,
+                         std::vector<atomic_int32_t> *counts,
                          chunkQueue *freeReceivedQueue,
                          chunkQueue *receivedQueue,
-                         std::atomic_int32_t *unfinishedReceiverThreads) {
+                         atomic_int32_t *unfinishedReceiverThreads) {
 
   // wait to grab a matrix from the queue
   MatrixChunk *chunk;
@@ -862,7 +853,7 @@ int main() {
   std::map<std::pair<size_t, size_t>, int> aggregator;
 
   // this tells us how many multiplied chunks we are going to have
-  std::vector<std::atomic_int32_t> sentMultiCounts((size_t) communicator->getNumNodes());
+  std::vector<atomic_int32_t> sentMultiCounts((size_t) communicator->getNumNodes());
 
   // create a btree
   auto bReverseIndexed = new matrixReverseIndexBTree{true};
@@ -924,9 +915,14 @@ int main() {
   auto receivedQueue = new chunkQueue();
 
   // how many nodes are not done executing
-  std::atomic_int32_t unfinishedJoinReceivers = communicator->getNumNodes();
-  std::atomic_int32_t unfinishedMultiplyThreads = resourceManager->getNumCores();
-  std::atomic_int32_t unfinishedReceiverThreads = communicator->getNumNodes();
+  atomic_int32_t unfinishedJoinReceivers;
+  unfinishedJoinReceivers = communicator->getNumNodes();
+
+  atomic_int32_t unfinishedMultiplyThreads;
+  unfinishedMultiplyThreads = resourceManager->getNumCores();
+
+  atomic_int32_t unfinishedReceiverThreads;
+  unfinishedReceiverThreads = communicator->getNumNodes();
 
   // this part is taking in
   for(int i = 0; i < communicator->getNumNodes(); ++i) {

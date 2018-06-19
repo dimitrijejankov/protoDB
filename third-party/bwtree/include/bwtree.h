@@ -8373,7 +8373,7 @@ try_join_again:
             return;
           default:
             // This does not include INNER ABORT node
-            printf("Unknown node type: %d\n", (int)type);
+            //printf("Unknown node type: %d\n", (int)type);
 
             assert(false);
             return;

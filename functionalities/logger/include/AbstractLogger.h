@@ -8,6 +8,7 @@
 #include <string>
 #include <memory>
 #include <AbstractFunctionality.h>
+#include <sstream>
 
 /**
  * The abstract pointer
@@ -78,8 +79,12 @@ public:
    */
   template<typename T>
   AbstractLogger& operator<<(const T &value) {
+
+    std::stringstream stream;
+    stream << value;
+
     // outputs the text to the logger
-    output(std::to_string(value));
+    output(stream.str());
 
     // returns the instance back
     return *this;

@@ -5,14 +5,17 @@ project(protoDB)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 
 # set the compiler
-set(CMAKE_C_COMPILER "gcc-7")
-set(CMAKE_CXX_COMPILER "g++-7")
+set(CMAKE_C_COMPILER "gcc-5")
+set(CMAKE_CXX_COMPILER "g++-5")
+
+# set the cpp standard
+set (CMAKE_CXX_STANDARD 14)
 
 # check if we support native architecture
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
 if (COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -O3 -std=c++1z")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -O3")
 endif()
 
 # find threads

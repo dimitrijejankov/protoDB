@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "BlockManager.h"
 
 BlockManager::BlockManager(size_t blockSize, size_t numBlocks) {
