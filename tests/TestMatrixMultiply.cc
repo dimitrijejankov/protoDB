@@ -12,7 +12,7 @@ size_t size = 10;
 
 boost::barrier *bar;
 
-std::atomic<long> globalTime = 0;
+std::atomic<long> globalTime;
 
 void initMatrix(double *data) {
   for(int i = 0; i < size; ++i) {
@@ -82,6 +82,7 @@ int main(int argc, char *argv[]) {
   // convert the argument to the size
   size = (size_t)atoi(argv[1]);
   size_t threadNo = (size_t)atoi(argv[2]);
+  globalTime = 0;
 
   // init the barrier
   bar = new boost::barrier(threadNo);
