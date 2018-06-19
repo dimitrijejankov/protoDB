@@ -6,12 +6,13 @@
 #include <iostream>
 #include <boost/thread/barrier.hpp>
 #include <fstream>
+#include <atomic>
 
 size_t size = 10;
 
 boost::barrier *bar;
 
-long globalTime = 0;
+std::atomic<long> globalTime = 0;
 
 void initMatrix(double *data) {
   for(int i = 0; i < size; ++i) {
