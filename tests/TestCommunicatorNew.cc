@@ -22,8 +22,8 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 25600;
-size_t chunkSize = 3200;
+size_t size = 12800;
+size_t chunkSize = 1600;
 
 struct BroadcastedIndices {
 

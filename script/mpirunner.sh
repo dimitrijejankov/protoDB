@@ -1,0 +1,1 @@
+mpirun --allow-run-as-root -np 4 -hosts master,node001,node002,node003 /root/protoDB/test-comunicator
