@@ -1,1 +1,1 @@
-mpirun --allow-run-as-root -np 4 -host master,node001,node002,node003 /home/protoDB/test-comunicator
+mpirun -np 4 -host master,node001,node002,node003 /home/protoDB/test-comunicator

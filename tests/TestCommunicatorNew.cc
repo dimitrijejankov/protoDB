@@ -806,7 +806,7 @@ int main() {
   MatrixChunk *aValues;
 
   // create the identity lambda
-  auto identityLambda = [](size_t i, size_t j) { return (size_t) (i == j); };
+  auto identityLambda = [](size_t i, size_t j) { return (size_t) (i + j); };
   createMatrix(identityLambda, communicator, size, chunkSize, &aValues, aRowIDs, aColIDs);
 
   // this is where our stuff will be stored for matrix A
