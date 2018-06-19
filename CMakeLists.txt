@@ -4,6 +4,10 @@ project(protoDB)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 
+# set the compiler
+set(CMAKE_C_COMPILER "gcc-7")
+set(CMAKE_CXX_COMPILER "g++-7")
+
 # check if we support native architecture
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_OPT_ARCH_NATIVE_SUPPORTED)
