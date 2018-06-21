@@ -22,7 +22,7 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 256000;
+size_t size = 25600;
 size_t chunkSize = 3200;
 
 typedef std::atomic<int32_t> atomic_int32_t;
@@ -136,6 +136,8 @@ void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chu
   // allocate the memory for the counts
   std::vector<size_t> counts(numNodes);
 
+  int32_t node = 0;
+
   // go through each chunk
   for(auto c_i = 0; c_i < chunksPerDimension; ++c_i) {
 
@@ -143,10 +145,13 @@ void generateMatrix(size_t (*valueFunc)(size_t, size_t), size_t size, size_t chu
     for(auto c_j = 0; c_j < chunksPerDimension; ++c_j) {
 
       // the node we are sending this chunk to
-      int32_t node = rand() % (int32_t) numNodes;
+      //int32_t node = rand() % (int32_t) numNodes;
 
       // set the permutation
       permutation[c_i * chunksPerDimension + c_j] = node;
+
+      // set the next node
+      node = (node + 1) % (int32_t) numNodes;
 
       // increase the counts
       counts[node]++;
