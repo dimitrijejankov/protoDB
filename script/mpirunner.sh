@@ -1,1 +1,1 @@
-mpirun -np 4 -host master,node001,node002,node003 /home/protoDB/test-comunicator
+mpiexec -np 4 -host master,node001,node002,node003 /home/protoDB/test-comunicator

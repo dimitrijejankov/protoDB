@@ -22,7 +22,7 @@ const int32_t CHUNK_TAG = 2;
 const int32_t AGG_CHUNK_TAG = 3;
 
 // dimensions of the matrices A and B
-size_t size = 38400;
+size_t size = 256000;
 size_t chunkSize = 3200;
 
 typedef std::atomic<int32_t> atomic_int32_t;
@@ -529,7 +529,7 @@ void multiplyStage(int32_t myNode,
   while(true) {
 
     // try to grab something with a timeout of 10 us
-    auto success = multiplyQueue->wait_dequeue_timed(chunk, 10);
+    auto success = multiplyQueue->wait_dequeue_timed(chunk, 50000);
 
     // should we end this
     if (!success && (*unfinishedJoinReceiverNodes) == 0) {
@@ -640,7 +640,7 @@ void aggregationProcessingStage(std::map<std::pair<size_t, size_t>, std::vector<
   while(true) {
 
     // try to grab something with a timeout of 10 us
-    auto success = processedQueue->wait_dequeue_timed(aggregationChunk, 10);
+    auto success = processedQueue->wait_dequeue_timed(aggregationChunk, 50000);
 
     // should we end this
     if (!success && (*unfinishedMultiplyThreads) == 0) {
@@ -687,7 +687,7 @@ void recievedAggregationProcessingStage(std::map<std::pair<size_t, size_t>, std:
   while(true) {
 
     // try to grab something with a timeout of 10 us
-    auto success = receivedQueue->wait_dequeue_timed(aggregationChunk, 10);
+    auto success = receivedQueue->wait_dequeue_timed(aggregationChunk, 50000);
 
     // should we end this
     if (!success && (*unfinishedReceivedThreads) == 0) {
@@ -720,7 +720,7 @@ void aggregationSender(CommunicatorPtr communicator,
   while(true) {
 
     // try to grab something with a timeout of 10 us
-    auto success = sendingQueue->wait_dequeue_timed(aggregationChunk, 10);
+    auto success = sendingQueue->wait_dequeue_timed(aggregationChunk, 50000);
 
     // should we end this
     if (!success && (*unfinishedMultiplyThreads) == 0) {
