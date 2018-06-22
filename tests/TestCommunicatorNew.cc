@@ -530,11 +530,21 @@ void multiplyStage(int32_t myNode,
 
   std::vector<double> tmp(chunkSize * chunkSize);
 
+  bool success = true;
+
+  // init the value to something
+  auto start = std::chrono::steady_clock::now();
+
   // do this while you can
   while(true) {
 
+    // if we succeeded previously
+    if(success) {
+      start = std::chrono::steady_clock::now();
+    }
+
     // try to grab something with a timeout of 10 us
-    auto success = multiplyQueue->wait_dequeue_timed(chunk, 50000);
+    success = multiplyQueue->wait_dequeue_timed(chunk, 50000);
 
     // should we end this
     if (!success && (*unfinishedJoinReceiverNodes) == 0) {
@@ -543,6 +553,9 @@ void multiplyStage(int32_t myNode,
 
     // if we have a chunk
     if(success) {
+
+      // add the total time
+      std::cout << "Waited for chunk : " << std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count() << std::endl;
 
       // grab the iterator
       auto it = aIndexed->Begin(chunk->rowID);
@@ -560,8 +573,14 @@ void multiplyStage(int32_t myNode,
           auto blockOffset = (size_t)(it->second - aNodeOffset);
           gsl_matrix_view a = gsl_matrix_view_array(aValues->getChunkAt(blockOffset)->getData(), chunkSize, chunkSize);
 
+          // wait for the free multiply chunk
+          auto startFreeMultiplyChunk = std::chrono::steady_clock::now();
+
           // grab a free processing chunk
           freeMultipliedQueue->wait_dequeue(processingChunk);
+
+          // how much did it take to grab a free processing chunk
+          std::cout << "Waited for free chunk : " << std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - startFreeMultiplyChunk).count() << std::endl;
 
           // set the indices
           processingChunk->colID = chunk->colID;
